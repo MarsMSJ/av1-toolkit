@@ -7,6 +7,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_executable(my_app
   src/main.cpp
+        include/Av1RefFrameMap.cpp
+        include/Av1RefFrameMap.h
+        include/av1_dpb_manager.h
 )
 
 # Show header in Xcode and set include path (optional but nice)
