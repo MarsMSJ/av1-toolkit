@@ -40,7 +40,7 @@ public:
 
         // Resolve refs for MC regardless of show flags (used by inter tools / entropy context)
         for (int i = 0; i < 7; ++i) {
-            int8_t slot = in.ref_frames[i];
+            auto slot = in.ref_frames[i];
             if (slot < 0 || slot > 7) { out.refs.ref_surf[i] = -1; continue; }
             uint8_t sid = map.slot_to_surf[(size_t)slot];
             out.refs.ref_surf[i] = (sid == 0x7f) ? -1 : (int)sid;
@@ -48,7 +48,8 @@ public:
 
         // Path A: show_existing_frame → display an existing slot, no new coded frame.
         if (in.show_existing_frame) {
-            if (in.existing_frame_idx > 7) return DpbStatus::InvalidExistingIndex;
+            if (in.existing_frame_idx > 7) {return DpbStatus::InvalidExistingIndex;}
+
             uint8_t sid = map.slot_to_surf[in.existing_frame_idx];
             if (sid == 0x7f) return DpbStatus::InvalidExistingIndex;
 
