@@ -1,0 +1,768 @@
+{
+  "name": "av1_decoder_decoding_dataset",
+  "version": "2025-09-14",
+  "license_note": "Original instructional/derivative content for training; avoid verbatim spec text.",
+  "schema": "jsonl-like in JSON array; each item has fields: kind ∈ {instruction,worked_example,unit_qa}, instruction,input,output, and optional tags.",
+  "source_focus": "AV1 decoding only (syntax parsing + reconstruction pipeline). No encoding guidance.",
+  "sections": [
+    {
+      "title": "Core Decoding Tools",
+      "count": 15,
+      "items": [
+        {
+          "kind": "instruction",
+          "instruction": "List the AV1 decoder pipeline stages end-to-end.",
+          "input": "",
+          "output": "Parse OBUs → frame header parse → reference frame setup → tile group parsing → entropy decode of symbols → inverse quant/transform → intra/inter prediction (subpel/warp) → compound/OBMC → deblocking → CDEF → loop restoration (Wiener/SGR) → super-res (if any) → film grain (optional) → output/reorder.",
+          "tags": [
+            "pipeline",
+            "overview"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Superblock partitioning impact on decoding.",
+          "input": "",
+          "output": "Sequence header selects 64×64 or 128×128 SB. Partitions drive entropy contexts, transform bounds, edge availability, and loop-filter boundaries; decoder walks the partition tree to allocate mode info and neighbors.",
+          "tags": [
+            "partitioning"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Intra prediction families and behavior.",
+          "input": "",
+          "output": "DC, Smooth/Planar, Directional (angle set), Paeth, Filter‑Intra. Directional uses filtered references along quantized angles; Smooth fits gradient; DC averages; Paeth uses linear predictor with occlusion check; Filter‑Intra applies template filters.",
+          "tags": [
+            "intra"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Inter prediction reference model.",
+          "input": "",
+          "output": "Blocks pick single/compound refs from DPB slots (LAST..ALT2). Motion vectors at 1/4‑pel luma with 8‑tap luma and 4‑tap chroma filters; optional warped/global motion per ref.",
+          "tags": [
+            "inter",
+            "reference"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Subpel luma interpolation pseudocode.",
+          "input": "",
+          "output": "tmp[x,y]=∑_{k=-3..4}H[k]*src[x+k,y]; dst[x,y]=clip((∑_{k=-3..4}V[k]*tmp[x,y+k]+round)>>shift). Coeff tables chosen by fractional offsets.",
+          "tags": [
+            "interpolation",
+            "subpel"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "OBMC purpose.",
+          "input": "",
+          "output": "Blend current inter predictor with neighbors using overlapped windows to reduce seams at block borders.",
+          "tags": [
+            "obmc"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Global/warped motion summary.",
+          "input": "",
+          "output": "Header signals per‑ref model (identity/translation/affine/projective). For blocks opting in, map (x,y) through model and sample with subpel filters; clip coordinates.",
+          "tags": [
+            "warp"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Transform types and sizes.",
+          "input": "",
+          "output": "2D transforms = row×col from {DCT, ADST, FLIPADST, IDTX}. Inter up to 64×64, intra typically ≤32×32; asymmetrics allowed. ITX selected per block/tx set.",
+          "tags": [
+            "transform"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Inverse quant/transform sketch.",
+          "input": "",
+          "output": "level[i]=qcoeff[i]*dequant(dc/ac)>>dq_shift; inverse scan to (x,y); apply inverse 1D rows then cols per tx_type; round/shift and clamp to bit depth.",
+          "tags": [
+            "itx",
+            "dequant"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Entropy coder characterization.",
+          "input": "",
+          "output": "Context‑adaptive multi‑symbol range/boolean coding; probs reset/updated per frame/tile as allowed. Symbols include partition, modes, coeffs, MVs, etc.",
+          "tags": [
+            "entropy"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Deblocking inputs and flow.",
+          "input": "",
+          "output": "Base LF levels + ref/mode deltas + segmentation. HEV/flat decisions select tap patterns. Process vertical then horizontal per 4‑px edges; clamp outputs.",
+          "tags": [
+            "deblock"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "CDEF timing and idea.",
+          "input": "",
+          "output": "After deblock, before LR. Detect dominant direction per 8×8; apply constrained primary/secondary taps to suppress ringing while preserving edges.",
+          "tags": [
+            "cdef"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Loop restoration overview.",
+          "input": "",
+          "output": "Per plane per restoration unit: Wiener (separable) or SGR‑Proj (guided). Apply after CDEF with stripe overlap; clamp to bit depth.",
+          "tags": [
+            "lr"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Super‑resolution position in pipeline.",
+          "input": "",
+          "output": "If enabled, coded width < render width; upsample horizontally after LR and before film grain/output.",
+          "tags": [
+            "superres"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Order hints and legality check.",
+          "input": "",
+          "output": "Use N‑bit modular order hints; reject refs where diff_mod(N, ref, cur) < 0 to avoid future references.",
+          "tags": [
+            "order_hint"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Frame Header / Syntax Decoding",
+      "count": 20,
+      "items": [
+        {
+          "kind": "instruction",
+          "instruction": "Top‑level OBU types relevant to decoding.",
+          "input": "",
+          "output": "sequence_header, temporal_delimiter, frame_header (or frame), tile_group, metadata (e.g., film grain), padding.",
+          "tags": [
+            "obu"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Frame decode entry flow.",
+          "input": "",
+          "output": "(optional) temporal_delimiter → maybe new sequence_header → frame_header. If show_existing_frame: output and stop. Else parse all tile_group OBUs → reconstruct → run in‑loop tools.",
+          "tags": [
+            "flow"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Frame header major sections (decode order).",
+          "input": "",
+          "output": "frame_type/show flags → frame_id (if enabled) → frame_size/superres → render_size → reference mapping (primary_ref_frame, refresh flags) → screen/integer MV flags → order_hint → interp/tx settings → quant + deltas → segmentation map/params → delta_q/delta_lf flags → loop_filter → CDEF → LR → tile info → global motion → film grain src → coded_lossless derivation.",
+          "tags": [
+            "frame_header"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Parsing frame_type & show flags interactions.",
+          "input": "",
+          "output": "KEY resets refs; INTRA_ONLY is intra without full reset; INTER uses refs; SWITCH used for structure changes. show_frame displays immediately; show_existing_frame reuses DPB entry and skips tiles.",
+          "tags": [
+            "frame_type"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Frame size derivation logic.",
+          "input": "",
+          "output": "If frame_size_with_refs copies size from a ref: use it. Else if frame_size_override_flag: read explicit width/height; otherwise take from sequence header. Super‑res may reduce coded width; render size may differ.",
+          "tags": [
+            "size"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Super‑res signaling.",
+          "input": "",
+          "output": "Read coded denominator/scale; reconstruction uses coded_width; horizontal upscale later to render/output width.",
+          "tags": [
+            "superres"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Reference refresh flags semantics.",
+          "input": "",
+          "output": "refresh_frame_flags bitmask selects DPB slots to overwrite with the reconstructed output and order hint at end of frame.",
+          "tags": [
+            "dpb"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "primary_ref_frame usage.",
+          "input": "",
+          "output": "Seeds probability contexts/segment defaults from a chosen reference unless error_resilient or unavailable, in which case defaults are used.",
+          "tags": [
+            "contexts"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Order hint legality check at header time.",
+          "input": "",
+          "output": "For each listed ref index: ensure diff_mod(bits, ref_oh, cur_oh) ≥ 0; otherwise stream error.",
+          "tags": [
+            "order_hint"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Interpolation and motion mode enable flags.",
+          "input": "",
+          "output": "interpolation_filter can be switchable or fixed; header enables/disables OBMC/warp; force_integer_mv forbids fractional sampling for screen content.",
+          "tags": [
+            "interp",
+            "motion"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Transform signaling mode.",
+          "input": "",
+          "output": "tx_mode selects per‑block transform signaling vs derived; reduced_tx_set limits transform types to a subset for complexity savings.",
+          "tags": [
+            "transform"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Quant base and deltas; delta_q presence.",
+          "input": "",
+          "output": "Read base_qindex; chroma DC/AC deltas if present. If delta_q_present=1, later per‑region delta_q adjusts local qindex at block roots.",
+          "tags": [
+            "quant"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Segmentation enable/map/update.",
+          "input": "",
+          "output": "segmentation_enabled toggles; segmentation_update_map and segmentation_temporal_update control map coding; feature data per segment follows when enabled.",
+          "tags": [
+            "segmentation"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "delta_lf header.",
+          "input": "",
+          "output": "If delta_lf_present=1, read resolution and whether deltas are per‑direction/per‑plane; later parsed at block roots.",
+          "tags": [
+            "loop_filter"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Loop filter header fields.",
+          "input": "",
+          "output": "loop_filter_level[0..3], sharpness; optional ref/mode delta arrays when enabled.",
+          "tags": [
+            "loop_filter"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "CDEF header fields.",
+          "input": "",
+          "output": "cdef_damping, cdef_bits (table size), and that many (luma,chroma) strength entries.",
+          "tags": [
+            "cdef"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Loop restoration header fields.",
+          "input": "",
+          "output": "Per plane: lr_type (none/wiener/SGR/switchable) and RU size code; per‑frame limits for coeffs/eps; per‑RU params arrive later.",
+          "tags": [
+            "lr"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Tile info header.",
+          "input": "",
+          "output": "Uniform tiling uses tile_cols_log2/tile_rows_log2; non‑uniform provides explicit splits. Header may carry context_update_tile_id and per‑tile packet sizes (bytes).",
+          "tags": [
+            "tiles"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Global motion header.",
+          "input": "",
+          "output": "Per reference: model type and fixed‑point parameters within range; store matrices for warped mode blocks.",
+          "tags": [
+            "global_motion"
+          ]
+        },
+        {
+          "kind": "instruction",
+          "instruction": "Film grain presence locus.",
+          "input": "",
+          "output": "Film grain parameters may be in frame header or metadata OBU; decoder uses one source and ensures grain is not referenced.",
+          "tags": [
+            "film_grain"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Worked Examples (Decoding Only)",
+      "count": 23,
+      "items": [
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: order hint legality check with 3‑bit hints.",
+          "input": "seq.order_hint_bits=3; cur=5; refs=[(idx=LAST,oh=6),(GOLDEN,oh=1),(ALT,oh=3)]",
+          "output": "diff_mod(3,6,5)=+1 OK; diff_mod(3,1,5)= (1-5)&7=4; 4 has msb=0 → +4 OK; diff_mod(3,3,5)=(3-5)&7=5; 5 has msb=1 → 5-8=−3 <0 → illegal (future). Drop ALT.",
+          "tags": [
+            "order_hint",
+            "example"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: frame size derived from reference vs explicit.",
+          "input": "frame_size_with_refs=1, use_ref=LAST with size 1920×1080; enable_superres=1, coded_denom=8 (scale=7/8).",
+          "output": "Coded frame size= (1920*7/8)×1080 = 1680×1080 (integer per spec rounding). Render size remains 1920×1080 unless overridden.",
+          "tags": [
+            "size",
+            "superres"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: delta_q at 8×8 granularity.",
+          "input": "base_q=128; delta_q_present=1; delta_q_res=2 (8×8). Region roots read dq:{+8, 0, −16}.",
+          "output": "Region A q=136; Region B q=128; Region C q=112. Child blocks inherit parent q unless they start a new region root.",
+          "tags": [
+            "quant",
+            "delta_q"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: loop filter level composition on an inter edge.",
+          "input": "lf_y=32; seg_delta=−4 (segment 3); ref_delta[ref=BWD]=+2; mode_delta[INTRA]=0; edge is inter with BWD and NEARMV.",
+          "output": "level = 32 + (−4) + 2 + mode_delta[inter_class_of_NEARMV]. If inter_class delta=−1 → level=29. Clamp to [0..63].",
+          "tags": [
+            "deblock"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: distance‑weighted compound weight.",
+          "input": "ref0_oh=20, ref1_oh=12, cur_oh=16, table maps |d0|=|16−20|=4, |d1|=|16−12|=4 to w=32.",
+          "output": "out=(32*A + 32*B + 32)>>6 = ((A+B)+1)>>1 (rounded average).",
+          "tags": [
+            "compound"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: subpel offsets from MV.",
+          "input": "MV=(+3,−5) in 1/4‑pel luma units.",
+          "output": "fx=(3&3)*2 = 6 in 1/8‑pel index; fy=((−5)&3)*2 = 2 (after modular handling). Use 8‑tap tables at frac 6 (x) and 2 (y).",
+          "tags": [
+            "interpolation"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: CDEF constrain sample.",
+          "input": "bit_depth=10; S=8; D=3; neighbor−center d=+20.",
+          "output": "shift=max(0, D−⌊log2(S)⌋)=3−3=0; m=max(0, 20−(20>>0))=0 → res=0; high diff fully constrained at this S/D.",
+          "tags": [
+            "cdef"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: Wiener normalization check.",
+          "input": "Horizontal taps h=[a,b,c,d,e,g] with center fixed and symmetry (a=e, b=d). Sum must equal 1<<shift.",
+          "output": "Verify a+b+center+b+a == 1<<shift (gain=1). If sum≠target, reject/clip per spec; decoder enforces before convolution.",
+          "tags": [
+            "wiener"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: LR unit grid from code.",
+          "input": "Plane Y, RU_size_code=64×64, frame 1920×1080.",
+          "output": "Mi=4×4 units → frame in Mi: 480×270. RU in Mi: 16×16. Grid: ceil(480/16)=30 cols, ceil(270/16)=17 rows.",
+          "tags": [
+            "lr",
+            "grid"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: tile layout (uniform).",
+          "input": "tile_cols_log2=2, tile_rows_log2=1 on 1920×1080 with 128×128 SBs.",
+          "output": "Cols=4, rows=2. SB grid: 15×9 (ceil). Column SB widths ~ ceil(15/4) with equalization; decoder computes exact column/row boundaries per spec rounding rules.",
+          "tags": [
+            "tiles"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: coded_lossless detection per plane.",
+          "input": "QIndex→dequant: Y: dc=0 ac=0; U: dc=0 ac=0; V: dc=2 ac=0; monochrome=0.",
+          "output": "plane_lossless[Y]=1, [U]=1, [V]=0 → coded_lossless=0. If monochrome=1, only Y matters → coded_lossless=1.",
+          "tags": [
+            "lossless"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: segmentation feature parse.",
+          "input": "segmentation_enabled=1; segment 2 has QDELTA enabled with −12; base_q=144.",
+          "output": "For blocks with seg_id=2, header‑scope qindex starts at clamp(144−12,0,MAXQ)=132 before any delta_q.",
+          "tags": [
+            "segmentation",
+            "quant"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: frame_id wrap validation.",
+          "input": "frame_id_length=15; delta_frame_id_length=7; prev_id=30000; current id read=200; ref id delta must be in (1..2^7).",
+          "output": "diff=(200−30000) mod 2^15 = 200−(30000−32768)=1968; 1968 exceeds max delta (127) → error if used for ref matching.",
+          "tags": [
+            "frame_id"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: render vs frame size.",
+          "input": "frame 1280×720; render_and_frame_size_different=1; render 1920×1080.",
+          "output": "Decoder reconstructs 1280×720; post‑filters run at coded size; upscaling to 1920×1080 occurs at presentation (and/or via super‑res if signaled).",
+          "tags": [
+            "render_size"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: OBMC neighbor set.",
+          "input": "Current block at (x,y) 32×32; above=inter, left=intra.",
+          "output": "Eligible neighbors: above only (inter). Blend window along top edge applied; left excluded because not inter.",
+          "tags": [
+            "obmc"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: chroma MV derivation (4:2:0).",
+          "input": "Luma MV=(+5,+1) qpel; subsampling 4:2:0.",
+          "output": "Scale to chroma grid → typically round to nearest 1/2 or 1/4 pel depending on chroma filter; offsets halved vs luma; sample with 4‑tap chroma filter; clamp at borders.",
+          "tags": [
+            "mv",
+            "chroma"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: EOB early exit.",
+          "input": "TX 8×8 with EOB at position 12 per scan.",
+          "output": "Decoder stops coefficient parsing after index 12; ITX only processes up to filled coefficients, improving speed.",
+          "tags": [
+            "coeffs",
+            "eob"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: diff_mod helper.",
+          "input": "bits=5, a=3, b=28.",
+          "output": "m=32; diff=(3−28)&31= (−25)&31=7; since 7 < 16 → result +7.",
+          "tags": [
+            "order_hint"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: tile packet size bounds check.",
+          "input": "tile_size_bytes says 12000; frame OBU payload remaining=11000.",
+          "output": "Invalid: tile size exceeds payload bounds → stream error; decoder aborts frame.",
+          "tags": [
+            "tiles",
+            "validation"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: skip_mode_present derivation.",
+          "input": "cur_oh=100; refs oh: {LAST=96, GOLDEN=110, ALT=80}.",
+          "output": "There exists one past (96 or 80) and one future (110) within window; compound allowed → skip_mode_present=1.",
+          "tags": [
+            "skip_mode"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: LR stripe overlap merge.",
+          "input": "Adjacent RUs produce overlapping rows 4 px tall.",
+          "output": "Decoder blends overlap with deterministic weights (e.g., top RU dominates top 2 rows, bottom RU the lower 2), preventing seams.",
+          "tags": [
+            "lr"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: global motion projective safe division.",
+          "input": "denom=g*x+h*y+1<<FP; example x=1000,y=500,g=h=−2 in 16.16.",
+          "output": "Compute denom in 64‑bit; if |denom| < epsilon (e.g., 1<<8) → reject model or clamp to identity to avoid overflow.",
+          "tags": [
+            "warp"
+          ]
+        },
+        {
+          "kind": "worked_example",
+          "instruction": "Worked: palette mode reconstruction (intra).",
+          "input": "palette_size=4; entries={10,50,100,200}; index map for 4×4 given.",
+          "output": "Decoder fills block by table lookup per index; no prediction filtering; apply bit‑depth clamp after write‑back.",
+          "tags": [
+            "palette"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Unit-Style QA (Decoding Only)",
+      "count": 20,
+      "items": [
+        {
+          "kind": "unit_qa",
+          "instruction": "Compute diff_mod for order hints.",
+          "input": "bits=4; cur=9; ref=2. Return signed diff.",
+          "output": "+9−2=+7; 7<8 → +7 (legal past).",
+          "tags": [
+            "order_hint",
+            "qa"
+          ]
+        },
+        {
+          "kind": "unit_qa",
+          "instruction": "Derive coded width with super‑res.",
+          "input": "input width=2560; scale numerator=7; denominator=8 (fixed).",
+          "output": "coded_width = floor(2560*7/8)=2240.",
+          "tags": [
+            "superres",
+            "qa"
+          ]
+        },
+        {
+          "kind": "unit_qa",
+          "instruction": "Map QIndex 0 → dequant check.",
+          "input": "Assume tables yield dc=0, ac=0 at QIndex=0. Is plane lossless?",
+          "output": "Yes for that plane; coded_lossless requires all active planes lossless.",
+          "tags": [
+            "quant",
+            "qa"
+          ]
+        },
+        {
+          "kind": "unit_qa",
+          "instruction": "Tile columns (uniform).",
+          "input": "tile_cols_log2=3; frame width in SBs=33.",
+          "output": "cols=8; widths are nearly equal: either 4 or 5 SBs per column, summing to 33 as per spec equalization.",
+          "tags": [
+            "tiles",
+            "qa"
+          ]
+        },
+        {
+          "kind": "unit_qa",
+          "instruction": "Edge eligibility for deblock.",
+          "input": "Block boundary is intra vs inter? tx size large vs small?",
+          "output": "Intra edges often use stronger thresholds; if tx size is large or skip set, eligibility/strength adjust per masks; if base level=0 → no filter.",
+          "tags": [
+            "deblock",
+            "qa"
+          ]
+        },
+        {
+          "kind": "unit_qa",
+          "instruction": "Chroma sample clamp.",
+          "input": "Sampling at x=−2 on 4:2:0 chroma plane width 640.",
+          "output": "Clamp x to 0; use edge extension value for taps beyond border.",
+          "tags": [
+            "sampling",
+            "qa"
+          ]
+        },
+        {
+          "kind": "unit_qa",
+          "instruction": "Distance‑weighted weight symmetry.",
+          "input": "|d0|=3, |d1|=9 with table → w≈48.",
+          "output": "Opposing weight is 16; check (w+(64−w))=64. Use out=(w*A+(64−w)*B+32)>>6.",
+          "tags": [
+            "compound",
+            "qa"
+          ]
+        },
+        {
+          "kind": "unit_qa",
+          "instruction": "EOB group cutoff.",
+          "input": "TX 16×16; EOB group indicates last coefficient < 64.",
+          "output": "Decoder only parses up to index 63 in scan order; rest zeros.",
+          "tags": [
+            "coeffs",
+            "qa"
+          ]
+        },
+        {
+          "kind": "unit_qa",
+          "instruction": "CDEF direction index count.",
+          "input": "How many discrete directions are evaluated for 8×8?",
+          "output": "A small finite set (e.g., 8 directions). Decoder picks max energy direction from this set.",
+          "tags": [
+            "cdef",
+            "qa"
+          ]
+        },
+        {
+          "kind": "unit_qa",
+          "instruction": "LR RU grid count.",
+          "input": "Frame 1920×1080; RU 64×64.",
+          "output": "Mi grid 480×270; RU Mi 16×16 → 30×17 units.",
+          "tags": [
+            "lr",
+            "qa"
+          ]
+        },
+        {
+          "kind": "unit_qa",
+          "instruction": "Projective warp denom sign.",
+          "input": "If denom negative after fixed‑point calc, what then?",
+          "output": "Signed division still valid; ensure no underflow and clip coords; reject if magnitude too small per spec.",
+          "tags": [
+            "warp",
+            "qa"
+          ]
+        },
+        {
+          "kind": "unit_qa",
+          "instruction": "Skip vs transform‑skip.",
+          "input": "Block skip=1 vs txfm_skip=1 (small TX).",
+          "output": "skip: no coeffs parsed → predictor only. txfm_skip: coeffs parsed but apply identity transform.",
+          "tags": [
+            "skip",
+            "qa"
+          ]
+        },
+        {
+          "kind": "unit_qa",
+          "instruction": "Monochrome header implications.",
+          "input": "monochrome=1; how to parse chroma params?",
+          "output": "Chroma quant/LF/CDEF/LR fields omitted or defaulted; only luma processed.",
+          "tags": [
+            "mono",
+            "qa"
+          ]
+        },
+        {
+          "kind": "unit_qa",
+          "instruction": "Ref scaling with mixed widths.",
+          "input": "Current coded width 1280; ref coded width 960.",
+          "output": "Horizontal scale factor maps current x to ref x; use scaled strides and tap tables based on ref scale.",
+          "tags": [
+            "scaling",
+            "qa"
+          ]
+        },
+        {
+          "kind": "unit_qa",
+          "instruction": "OBMC window length on a 16×16 block.",
+          "input": "What is the overlap extent?",
+          "output": "A small border strip (e.g., 2–4 px) with pre‑tabulated weights along the shared edge.",
+          "tags": [
+            "obmc",
+            "qa"
+          ]
+        },
+        {
+          "kind": "unit_qa",
+          "instruction": "Delta LF multi‑direction.",
+          "input": "delta_lf_multi=1 and delta_lf_present=1.",
+          "output": "Decoder later reads separate deltas per vertical/horizontal (and possibly per plane) at block roots aligned to delta_lf_res.",
+          "tags": [
+            "loop_filter",
+            "qa"
+          ]
+        },
+        {
+          "kind": "unit_qa",
+          "instruction": "Primary_ref_frame disabled case.",
+          "input": "error_resilient_mode=1.",
+          "output": "Ignore primary_ref_frame seeding; initialize contexts from defaults.",
+          "tags": [
+            "contexts",
+            "qa"
+          ]
+        },
+        {
+          "kind": "unit_qa",
+          "instruction": "Transform set restriction.",
+          "input": "reduced_tx_set=1.",
+          "output": "Only subset of transform types legal; decoder enforces at block parse and omits disallowed symbols.",
+          "tags": [
+            "transform",
+            "qa"
+          ]
+        },
+        {
+          "kind": "unit_qa",
+          "instruction": "Film grain reference safety.",
+          "input": "Can film‑grain frames be used as refs?",
+          "output": "No. Grain is applied at output and not stored for inter prediction.",
+          "tags": [
+            "film_grain",
+            "qa"
+          ]
+        },
+        {
+          "kind": "unit_qa",
+          "instruction": "Order of post‑filters.",
+          "input": "Can LR run before CDEF?",
+          "output": "No. Correct order is deblock → CDEF → LR → (grain).",
+          "tags": [
+            "filters",
+            "qa"
+          ]
+        }
+      ]
+    }
+  ]
+}
