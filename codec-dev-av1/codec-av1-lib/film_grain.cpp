@@ -433,267 +433,33 @@ void FilmGrainSynthesizer::generate_chroma_grain_blocks(
 }
 
 // ---------------------------------------------------------------------------
-// Overlap blending helpers — Section 7.18.3.5
-// ---------------------------------------------------------------------------
-
-// Vertical (column) boundary: blend left_block and right_block into dst.
-// width must be 1 or 2 (the overlap width in luma pixels).
-void FilmGrainSynthesizer::ver_boundary_overlap(
-    const int* left_block, int left_stride,
-    const int* right_block, int right_stride,
-    int* dst_block, int dst_stride,
-    int width, int height,
-    int grain_min, int grain_max) {
-  if (width == 1) {
-    while (height--) {
-      *dst_block = clamp((*left_block * 23 + *right_block * 22 + 16) >> 5,
-                         grain_min, grain_max);
-      left_block  += left_stride;
-      right_block += right_stride;
-      dst_block   += dst_stride;
-    }
-  } else { // width == 2
-    while (height--) {
-      dst_block[0] = clamp((27 * left_block[0] + 17 * right_block[0] + 16) >> 5,
-                           grain_min, grain_max);
-      dst_block[1] = clamp((17 * left_block[1] + 27 * right_block[1] + 16) >> 5,
-                           grain_min, grain_max);
-      left_block  += left_stride;
-      right_block += right_stride;
-      dst_block   += dst_stride;
-    }
-  }
-}
-
-// Horizontal (row) boundary: blend top_block and bottom_block into dst.
-// height must be 1 or 2 (the overlap height in luma rows).
-void FilmGrainSynthesizer::hor_boundary_overlap(
-    const int* top_block, int top_stride,
-    const int* bottom_block, int bottom_stride,
-    int* dst_block, int dst_stride,
-    int width, int height,
-    int grain_min, int grain_max) {
-  if (height == 1) {
-    while (width--) {
-      *dst_block = clamp((*top_block * 23 + *bottom_block * 22 + 16) >> 5,
-                         grain_min, grain_max);
-      ++top_block; ++bottom_block; ++dst_block;
-    }
-  } else { // height == 2
-    while (width--) {
-      dst_block[0] = clamp((27 * top_block[0] + 17 * bottom_block[0] + 16) >> 5,
-                           grain_min, grain_max);
-      dst_block[dst_stride] =
-          clamp((17 * top_block[top_stride] + 27 * bottom_block[bottom_stride] + 16) >> 5,
-                grain_min, grain_max);
-      ++top_block; ++bottom_block; ++dst_block;
-    }
-  }
-}
-
-void FilmGrainSynthesizer::copy_int_area(const int* src, int src_stride,
-                                         int* dst, int dst_stride,
-                                         int width, int height) {
-  while (height--) {
-    std::memcpy(dst, src, static_cast<size_t>(width) * sizeof(int));
-    src += src_stride;
-    dst += dst_stride;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Noise application — Section 7.18.3.4
-// In-place: luma/cb/cr point into the destination frame (already copied from src).
-// ---------------------------------------------------------------------------
-void FilmGrainSynthesizer::add_noise_to_block(
-    const FilmGrainParams& params,
-    uint8_t* luma, uint8_t* cb, uint8_t* cr,
-    int luma_stride, int chroma_stride,
-    const int* luma_grain, const int* cb_grain, const int* cr_grain,
-    int luma_grain_stride, int chroma_grain_stride,
-    int half_luma_height, int half_luma_width,
-    int bit_depth, int chroma_subsamp_y, int chroma_subsamp_x) {
-  int cb_mult      = params.cb_mult      - 128;
-  int cb_luma_mult = params.cb_luma_mult - 128;
-  int cb_offset    = params.cb_offset    - 256;
-
-  int cr_mult      = params.cr_mult      - 128;
-  int cr_luma_mult = params.cr_luma_mult - 128;
-  int cr_offset    = params.cr_offset    - 256;
-
-  const int rounding_offset = (1 << (params.scaling_shift - 1));
-
-  const int apply_y  = params.num_y_points > 0 ? 1 : 0;
-  const int apply_cb = (params.num_cb_points > 0 || params.chroma_scaling_from_luma) ? 1 : 0;
-  const int apply_cr = (params.num_cr_points > 0 || params.chroma_scaling_from_luma) ? 1 : 0;
-
-  if (params.chroma_scaling_from_luma) {
-    cb_mult = 0; cb_luma_mult = 64; cb_offset = 0;
-    cr_mult = 0; cr_luma_mult = 64; cr_offset = 0;
-  }
-
-  int min_luma, max_luma, min_chroma, max_chroma;
-  if (params.clip_to_restricted_range) {
-    min_luma   = min_luma_legal_range;   max_luma   = max_luma_legal_range;
-    min_chroma = min_chroma_legal_range; max_chroma = max_chroma_legal_range;
-  } else {
-    min_luma = min_chroma = 0;
-    max_luma = max_chroma = 255;
-  }
-
-  // Chroma loop — runs before luma (matches AOM order)
-  for (int i = 0; i < (half_luma_height << (1 - chroma_subsamp_y)); i++) {
-    for (int j = 0; j < (half_luma_width << (1 - chroma_subsamp_x)); j++) {
-      int average_luma;
-      if (chroma_subsamp_x) {
-        average_luma = (luma[(i << chroma_subsamp_y) * luma_stride + (j << chroma_subsamp_x)] +
-                        luma[(i << chroma_subsamp_y) * luma_stride + (j << chroma_subsamp_x) + 1] +
-                        1) >> 1;
-      } else {
-        average_luma = luma[(i << chroma_subsamp_y) * luma_stride + j];
-      }
-
-      if (apply_cb) {
-        cb[i * chroma_stride + j] = static_cast<uint8_t>(clamp(
-            cb[i * chroma_stride + j] +
-                ((scale_LUT(scaling_lut_cb_,
-                            clamp(((average_luma * cb_luma_mult +
-                                    cb_mult * cb[i * chroma_stride + j]) >> 6) + cb_offset,
-                                  0, (256 << (bit_depth - 8)) - 1), 8) *
-                      cb_grain[i * chroma_grain_stride + j] +
-                  rounding_offset) >> params.scaling_shift),
-            min_chroma, max_chroma));
-      }
-
-      if (apply_cr) {
-        cr[i * chroma_stride + j] = static_cast<uint8_t>(clamp(
-            cr[i * chroma_stride + j] +
-                ((scale_LUT(scaling_lut_cr_,
-                            clamp(((average_luma * cr_luma_mult +
-                                    cr_mult * cr[i * chroma_stride + j]) >> 6) + cr_offset,
-                                  0, (256 << (bit_depth - 8)) - 1), 8) *
-                      cr_grain[i * chroma_grain_stride + j] +
-                  rounding_offset) >> params.scaling_shift),
-            min_chroma, max_chroma));
-      }
-    }
-  }
-
-  if (apply_y) {
-    for (int i = 0; i < (half_luma_height << 1); i++) {
-      for (int j = 0; j < (half_luma_width << 1); j++) {
-        luma[i * luma_stride + j] = static_cast<uint8_t>(clamp(
-            luma[i * luma_stride + j] +
-                ((scale_LUT(scaling_lut_y_, luma[i * luma_stride + j], 8) *
-                      luma_grain[i * luma_grain_stride + j] +
-                  rounding_offset) >> params.scaling_shift),
-            min_luma, max_luma));
-      }
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Main entry point — mirrors add_film_grain_run in grain_synthesis.c
-// ---------------------------------------------------------------------------
-// add_film_grain — top-level entry point, AOM equivalent: av1_add_film_grain()
+// synthesizeFgSeg — main entry point
 //
-// Pipeline overview (maps to your decoder's structure):
-//
-//   1. Copy src → dst          (we work in-place on dst from here on)
-//   2. Build scaling LUTs      (your synthScalingLUTy / synthScalingLUTcb/cr)
-//   3. Generate grain templates (your generate blocks)
-//   4. For every 32x32 subblock across the frame:
-//        a. Pick a random window into the template  (PRNG per row, per block)
-//        b. Handle overlap blending at block edges  (if overlap_flag set)
-//        c. Apply grain to the frame pixels         (add_noise_to_block)
-//        d. Save edge grain into line/col buffers   (for the next block's overlap)
-int FilmGrainSynthesizer::add_film_grain(
+// Computes scaling LUTs and grain templates from parsed film grain params.
+// Pixel application (tiling, overlap blending, noise addition) is handled
+// by the HW decoder using the FilmGrainParams struct directly.
+// ---------------------------------------------------------------------------
+int FilmGrainSynthesizer::synthesizeFgSeg(
     const FilmGrainParams& params,
-    const std::vector<uint8_t>& src_y,  int src_y_stride,
-    const std::vector<uint8_t>& src_cb, int src_cb_stride,
-    const std::vector<uint8_t>& src_cr, int src_cr_stride,
-    std::vector<uint8_t>& dst_y,  int dst_y_stride,
-    std::vector<uint8_t>& dst_cb, int dst_cb_stride,
-    std::vector<uint8_t>& dst_cr, int dst_cr_stride,
-    int width, int height,
-    int chroma_subsamp_x, int chroma_subsamp_y) {
-
-  // -------------------------------------------------------------------------
-  // Validate buffer sizes before touching any pointers
-  // -------------------------------------------------------------------------
-  if (src_y.empty() || dst_y.empty() ||
-      src_y.size()  < static_cast<size_t>(height * src_y_stride) ||
-      dst_y.size()  < static_cast<size_t>(height * dst_y_stride))
-    return -1;
-
-  const int uv_height = height >> chroma_subsamp_y;
-  const int uv_width  = width  >> chroma_subsamp_x;
-
-  if (src_cb.empty() || dst_cb.empty() || src_cr.empty() || dst_cr.empty() ||
-      src_cb.size() < static_cast<size_t>(uv_height * src_cb_stride) ||
-      dst_cb.size() < static_cast<size_t>(uv_height * dst_cb_stride) ||
-      src_cr.size() < static_cast<size_t>(uv_height * src_cr_stride) ||
-      dst_cr.size() < static_cast<size_t>(uv_height * dst_cr_stride))
-    return -1;
-
-  // -------------------------------------------------------------------------
-  // Step 0 — Copy src → dst.
-  // We do this unconditionally (even when apply_grain is false) so the caller
-  // always gets a valid output frame.  All subsequent work is done in-place on
-  // dst, which is why add_noise_to_block takes raw pointers into dst rather
-  // than separate src/dst vectors.
-  // -------------------------------------------------------------------------
-  for (int y = 0; y < height; ++y)
-    std::copy(src_y.begin() + y * src_y_stride,
-              src_y.begin() + y * src_y_stride + width,
-              dst_y.begin() + y * dst_y_stride);
-  for (int y = 0; y < uv_height; ++y) {
-    std::copy(src_cb.begin() + y * src_cb_stride,
-              src_cb.begin() + y * src_cb_stride + uv_width,
-              dst_cb.begin() + y * dst_cb_stride);
-    std::copy(src_cr.begin() + y * src_cr_stride,
-              src_cr.begin() + y * src_cr_stride + uv_width,
-              dst_cr.begin() + y * dst_cr_stride);
-  }
+    int chroma_subsamp_x, int chroma_subsamp_y,
+    FgSynthesisOutput& out) {
 
   if (!params.apply_grain)
-    return 0; // nothing more to do — caller gets a clean copy
+    return -1;
 
-  // -------------------------------------------------------------------------
-  // Grain sample range for this bit depth.
-  // For 8-bit: center=128, so grain values live in [-128, 127].
-  // For 10-bit: center=512, range is [-512, 511].
-  // The AR filter and overlap clamp to [grain_min_, grain_max_] to prevent
-  // the noise from accumulating out of range before it's applied to pixels.
-  // -------------------------------------------------------------------------
+  // Grain sample range for this bit depth (8-bit: [-128, 127])
   const int bit_depth    = static_cast<int>(params.bit_depth);
   const int grain_center = 128 << (bit_depth - 8);
   grain_min_ = -grain_center;
   grain_max_ =  grain_center - 1;
 
-  // -------------------------------------------------------------------------
-  // Grain template padding constants (identical to AOM add_film_grain_run).
-  //
-  // The template block is larger than the 64x64 usable area.  The extra rows
-  // and columns are "warm-up" padding so the AR filter has valid causal samples
-  // to look at when it processes the first real rows/columns.
-  //
-  // ar_padding = 3 = maximum possible AR lag.  Even if params.ar_coeff_lag is
-  // smaller, we always allocate for lag=3 so the same template dimensions are
-  // used regardless of the actual lag value.
-  //
-  // Template layout (luma, lag=3 example):
-  //   top_pad(3) + ar_padding*2(6) + subblock*2(64) + bottom_pad(0) = 73 rows
-  //   left_pad(3) + ar_padding*2(6) + subblock*2(64) + ar_padding*2(6) + right_pad(3) = 82 cols
-  // -------------------------------------------------------------------------
+  // Padding constants — same as AOM, always sized for max lag=3
   static const int left_pad   = 3;
   static const int right_pad  = 3;
   static const int top_pad    = 3;
   static const int bottom_pad = 0;
   static const int ar_padding = 3;
 
-  // Chroma subblock is half the luma subblock in each subsampled dimension
   const int chroma_subblock_size_y = luma_subblock_size_y >> chroma_subsamp_y;
   const int chroma_subblock_size_x = luma_subblock_size_x >> chroma_subsamp_x;
 
@@ -702,7 +468,6 @@ int FilmGrainSynthesizer::add_film_grain(
   const int luma_block_size_x =
       left_pad + 2 * ar_padding + luma_subblock_size_x * 2 + 2 * ar_padding + right_pad;
 
-  // (2 >> subsamp) collapses to 1 for 4:2:0, stays 2 for 4:4:4
   const int chroma_block_size_y =
       top_pad + (2 >> chroma_subsamp_y) * ar_padding +
       chroma_subblock_size_y * 2 + bottom_pad;
@@ -710,28 +475,10 @@ int FilmGrainSynthesizer::add_film_grain(
       left_pad + (2 >> chroma_subsamp_x) * ar_padding +
       chroma_subblock_size_x * 2 + (2 >> chroma_subsamp_x) * ar_padding + right_pad;
 
-  // Stride = width of the template block (flat row-major storage)
   const int luma_grain_stride   = luma_block_size_x;
   const int chroma_grain_stride = chroma_block_size_x;
 
-  // -------------------------------------------------------------------------
-  // Build AR prediction position tables.
-  //
-  // The AR filter at each sample (i,j) computes a weighted sum of its causal
-  // neighbourhood.  pred_pos encodes which neighbours to use as {row_offset,
-  // col_offset, use_luma}.
-  //
-  // For lag=2 the luma causal support looks like (x = current sample):
-  //   . . . . .
-  //   . * * * .    ← row -2, cols -2..+2  (5 samples)
-  //   . * * * .    ← row -1, cols -2..+2  (5 samples)
-  //   . * * x .    ← row  0, cols -2..-1  (2 samples)
-  // Total: 12 positions = 2 * lag * (lag + 1)
-  //
-  // Chroma gets one extra position at {0,0,use_luma=1} when luma grain exists.
-  // That position feeds the averaged luma grain into the chroma AR filter
-  // (chroma_scaling_from_luma coupling).
-  // -------------------------------------------------------------------------
+  // AR prediction position tables
   const int num_pos_luma   = 2 * params.ar_coeff_lag * (params.ar_coeff_lag + 1);
   const int num_pos_chroma = num_pos_luma + (params.num_y_points > 0 ? 1 : 0);
 
@@ -752,409 +499,45 @@ int FilmGrainSynthesizer::add_film_grain(
       ++pos;
     }
     if (params.num_y_points > 0)
-      pred_pos_chroma[pos] = {0, 0, 1}; // luma-coupling tap
+      pred_pos_chroma[pos] = {0, 0, 1};
   }
 
-  // -------------------------------------------------------------------------
-  // Step 1 — Generate grain templates.
-  //          (Your generateFilmGrainBlocks — which internally calls the
-  //           per-plane generators.)
-  //
-  // These are the noise textures we will tile across the frame.  They are
-  // generated ONCE per frame from the bitstream seed — not once per block.
-  // Each block later picks a random 32x32 window out of the 64x64 inner
-  // region of the template, giving spatial variety without re-running the AR
-  // filter every block.
-  //
-  // generate_luma_grain_block:
-  //   - Fills the whole template with Gaussian noise scaled to bit depth
-  //     using your get_random_number() (same LFSR as AOM).
-  //   - Uses round2(gaussian_sequence[rng], gauss_sec_shift) to scale:
-  //       round2(x, s) = (x + (1<<s)>>1) >> s  — identical to your helper.
-  //   - Runs the AR filter over the valid region (top_pad..end, left_pad..end)
-  //     The padding rows/cols above/left are untouched — they act as boundary
-  //     samples that keep the AR filter stable at the edges.
-  //
-  // generate_chroma_grain_blocks:
-  //   - Same as luma but re-seeds the PRNG separately for Cb (seed 7<<5) and
-  //     Cr (seed 11<<5) so chroma grain is decorrelated from luma.
-  //   - When use_luma==1 in pred_pos, the AR filter couples chroma to the
-  //     luma template (averaged over the subsampling region).
-  // -------------------------------------------------------------------------
-  std::vector<int> luma_grain_block(luma_block_size_y * luma_grain_stride);
-  std::vector<int> cb_grain_block(chroma_block_size_y * chroma_grain_stride);
-  std::vector<int> cr_grain_block(chroma_block_size_y * chroma_grain_stride);
+  // Allocate and generate grain templates
+  out.luma_grain.assign(luma_block_size_y   * luma_grain_stride,   0);
+  out.cb_grain.assign  (chroma_block_size_y * chroma_grain_stride, 0);
+  out.cr_grain.assign  (chroma_block_size_y * chroma_grain_stride, 0);
 
-  generate_luma_grain_block(params, pred_pos_luma, luma_grain_block.data(),
+  generate_luma_grain_block(params, pred_pos_luma, out.luma_grain.data(),
                             luma_block_size_y, luma_block_size_x, luma_grain_stride,
                             left_pad, top_pad, right_pad, bottom_pad);
 
-  generate_chroma_grain_blocks(params, pred_pos_chroma, luma_grain_block.data(),
-                               cb_grain_block.data(), cr_grain_block.data(),
+  generate_chroma_grain_blocks(params, pred_pos_chroma, out.luma_grain.data(),
+                               out.cb_grain.data(), out.cr_grain.data(),
                                luma_grain_stride,
                                chroma_block_size_y, chroma_block_size_x, chroma_grain_stride,
                                left_pad, top_pad, right_pad, bottom_pad,
                                chroma_subsamp_y, chroma_subsamp_x);
 
-  // -------------------------------------------------------------------------
-  // Step 2 — Build scaling LUTs.
-  //          (Your synthesizeScalingLuty / synthesizeScalingLutcb /
-  //           synthesizeScalingLutcr.)
-  //
-  // The spec defines up to 14 (luma) or 10 (chroma) control points in
-  // [pixel_value, scaling_value] space.  init_scaling_function interpolates
-  // between them to fill a 256-entry LUT.
-  //
-  // The LUT is always 256 entries for all bit depths — pixel values above 8-bit
-  // are handled at lookup time by scale_LUT(), which linearly interpolates
-  // between adjacent entries using the sub-8-bit fraction of the pixel value.
-  //
-  // chroma_scaling_from_luma: instead of separate chroma points, the encoder
-  // says "use the luma LUT for chroma too".  In your decoder this is the
-  // memcpy path; here we copy the std::array directly.
-  //
-  // Note: getFilmGrainDataParams (your name for parsing the OBU film grain
-  // SEI / sequence header syntax) populates the FilmGrainParams struct that
-  // is passed in here — its output is the input to this whole function.
-  // -------------------------------------------------------------------------
-  init_scaling_function(params.scaling_points_y.data(),  params.num_y_points,  scaling_lut_y_);
+  // Scaling LUTs
+  init_scaling_function(params.scaling_points_y.data(),  params.num_y_points,  out.scaling_lut_y);
   if (params.chroma_scaling_from_luma) {
-    // Chroma scaling driven entirely by luma pixel value — no separate cb/cr points
-    scaling_lut_cb_ = scaling_lut_y_;
-    scaling_lut_cr_ = scaling_lut_y_;
+    out.scaling_lut_cb = out.scaling_lut_y;
+    out.scaling_lut_cr = out.scaling_lut_y;
   } else {
-    init_scaling_function(params.scaling_points_cb.data(), params.num_cb_points, scaling_lut_cb_);
-    init_scaling_function(params.scaling_points_cr.data(), params.num_cr_points, scaling_lut_cr_);
+    init_scaling_function(params.scaling_points_cb.data(), params.num_cb_points, out.scaling_lut_cb);
+    init_scaling_function(params.scaling_points_cr.data(), params.num_cr_points, out.scaling_lut_cr);
   }
 
-  // -------------------------------------------------------------------------
-  // Step 3 — Overlap buffers.
-  //
-  // When overlap_flag is set, the 2-pixel edges between adjacent subblocks are
-  // blended rather than having a hard cut in the grain pattern.  We keep two
-  // scratch buffers per plane:
-  //
-  //   line_buf — 2 rows wide, full frame width.
-  //              Holds the bottom 2 grain rows of the current block row so the
-  //              NEXT block row can blend its top 2 rows against them.
-  //
-  //   col_buf  — 2 columns wide, one subblock tall (+2 for the corner).
-  //              Holds the right 2 grain columns of the current block so the
-  //              NEXT block to the right can blend its left 2 columns.
-  //
-  // Both buffers carry grain values (integers), not pixel values — blending
-  // happens in grain space before add_noise_to_block converts to pixels.
-  // -------------------------------------------------------------------------
-  const int overlap = params.overlap_flag ? 1 : 0;
+  // Store template dimensions for the caller
+  out.luma_block_size_y   = luma_block_size_y;
+  out.luma_block_size_x   = luma_block_size_x;
+  out.chroma_block_size_y = chroma_block_size_y;
+  out.chroma_block_size_x = chroma_block_size_x;
 
-  std::vector<int> y_line_buf (dst_y_stride  * 2, 0);
-  std::vector<int> cb_line_buf(dst_cb_stride * (2 >> chroma_subsamp_y), 0);
-  std::vector<int> cr_line_buf(dst_cr_stride * (2 >> chroma_subsamp_y), 0);
-
-  std::vector<int> y_col_buf ((luma_subblock_size_y   + 2)                       * 2, 0);
-  std::vector<int> cb_col_buf((chroma_subblock_size_y + (2 >> chroma_subsamp_y)) * (2 >> chroma_subsamp_x), 0);
-  std::vector<int> cr_col_buf((chroma_subblock_size_y + (2 >> chroma_subsamp_y)) * (2 >> chroma_subsamp_x), 0);
-
-  // -------------------------------------------------------------------------
-  // Step 4 — Block dispatch loop.
-  //
-  // The frame is divided into 32x32 luma subblocks (16x16 in half-luma coords,
-  // which is what y/x count in here).  For each subblock we:
-  //   a) Re-seed the PRNG at the start of each row of blocks
-  //   b) Draw one random byte to get a 4-bit row offset and 4-bit col offset
-  //      into the 64x64 inner region of the template
-  //   c) Process any overlap edges (vertical then horizontal)
-  //   d) Apply the selected template window to the frame pixels
-  //   e) Save the edge grain into the overlap buffers
-  //
-  // Why half-luma units?  The loop strides by luma_subblock_size >> 1 = 16,
-  // and actual pixel positions are (y<<1), (x<<1).  This is a direct copy of
-  // AOM's loop structure — keeping the same units makes porting straightforward.
-  // -------------------------------------------------------------------------
-  for (int y = 0; y < height / 2; y += (luma_subblock_size_y >> 1)) {
-    // Re-seed per row of blocks. luma_line = y*2 (the actual luma row index).
-    // This means every row of 32x32 blocks shares the same initial PRNG state,
-    // then the per-block random draw advances it independently per block.
-    init_random_generator(y * 2, params.random_seed);
-
-    for (int x = 0; x < width / 2; x += (luma_subblock_size_x >> 1)) {
-
-      // --------------------------------------------------------------------
-      // Random window selection.
-      //
-      // get_random_number(8) pulls 8 bits from the PRNG.
-      // Low  4 bits → row offset (0..15) into the 64-row inner region
-      // High 4 bits → col offset (0..15) into the 64-col inner region
-      //
-      // The inner region starts at (top_pad + 2*ar_padding) = 9 from the top
-      // and (left_pad + 2*ar_padding) = 9 from the left.  Each offset unit is
-      // 2 luma pixels (<<1), giving 16 possible positions across 32 pixels.
-      // This randomises the grain pattern spatially without regenerating the
-      // template — both cheap and spec-compliant.
-      // --------------------------------------------------------------------
-      const int rand8    = get_random_number(8);
-      const int offset_y = rand8 & 15;
-      const int offset_x = (rand8 >> 4) & 15;
-
-      // Row/col indices into the flat grain template arrays
-      const int luma_offset_y = left_pad + 2 * ar_padding + (offset_y << 1);
-      const int luma_offset_x = top_pad  + 2 * ar_padding + (offset_x << 1);
-
-      const int chroma_offset_y = top_pad  + (2 >> chroma_subsamp_y) * ar_padding +
-                                  offset_y * (2 >> chroma_subsamp_y);
-      const int chroma_offset_x = left_pad + (2 >> chroma_subsamp_x) * ar_padding +
-                                  offset_x * (2 >> chroma_subsamp_x);
-
-      // --------------------------------------------------------------------
-      // Vertical (column) overlap — fires when x > 0 and overlap is on.
-      //
-      // col_buf holds the right 2 columns of the PREVIOUS block to the left.
-      // We blend those with the left 2 columns of the CURRENT block's template
-      // window, writing the result back into col_buf.
-      // Then add_noise_to_block applies that blended 2-column strip to the
-      // frame at the boundary between the two blocks.
-      //
-      // Blend weights (ver_boundary_overlap, width=2):
-      //   col 0: (27 * left + 17 * right + 16) >> 5   ← mostly from previous block
-      //   col 1: (17 * left + 27 * right + 16) >> 5   ← mostly from current block
-      // --------------------------------------------------------------------
-      if (overlap && x) {
-        ver_boundary_overlap(
-            y_col_buf.data(), 2,
-            luma_grain_block.data() + luma_offset_y * luma_grain_stride + luma_offset_x,
-            luma_grain_stride,
-            y_col_buf.data(), 2, 2,
-            std::min(luma_subblock_size_y + 2, height - (y << 1)),
-            grain_min_, grain_max_);
-
-        ver_boundary_overlap(
-            cb_col_buf.data(), 2 >> chroma_subsamp_x,
-            cb_grain_block.data() + chroma_offset_y * chroma_grain_stride + chroma_offset_x,
-            chroma_grain_stride,
-            cb_col_buf.data(), 2 >> chroma_subsamp_x, 2 >> chroma_subsamp_x,
-            std::min(chroma_subblock_size_y + (2 >> chroma_subsamp_y),
-                     (height - (y << 1)) >> chroma_subsamp_y),
-            grain_min_, grain_max_);
-
-        ver_boundary_overlap(
-            cr_col_buf.data(), 2 >> chroma_subsamp_x,
-            cr_grain_block.data() + chroma_offset_y * chroma_grain_stride + chroma_offset_x,
-            chroma_grain_stride,
-            cr_col_buf.data(), 2 >> chroma_subsamp_x, 2 >> chroma_subsamp_x,
-            std::min(chroma_subblock_size_y + (2 >> chroma_subsamp_y),
-                     (height - (y << 1)) >> chroma_subsamp_y),
-            grain_min_, grain_max_);
-
-        // i=1 when y>0: the very top row of this strip was already handled by
-        // the horizontal overlap below — don't double-apply it.
-        const int i = y ? 1 : 0;
-        add_noise_to_block(
-            params,
-            dst_y.data()  + ((y + i) << 1) * dst_y_stride  + (x << 1),
-            dst_cb.data() + ((y + i) << (1 - chroma_subsamp_y)) * dst_cb_stride + (x << (1 - chroma_subsamp_x)),
-            dst_cr.data() + ((y + i) << (1 - chroma_subsamp_y)) * dst_cr_stride + (x << (1 - chroma_subsamp_x)),
-            dst_y_stride, dst_cb_stride,
-            y_col_buf.data()  + i * 4,
-            cb_col_buf.data() + i * (2 - chroma_subsamp_y) * (2 - chroma_subsamp_x),
-            cr_col_buf.data() + i * (2 - chroma_subsamp_y) * (2 - chroma_subsamp_x),
-            2, 2 - chroma_subsamp_x,
-            std::min(luma_subblock_size_y >> 1, height / 2 - y) - i, 1,
-            bit_depth, chroma_subsamp_y, chroma_subsamp_x);
-      }
-
-      // --------------------------------------------------------------------
-      // Horizontal (row) overlap — fires when y > 0 and overlap is on.
-      //
-      // line_buf holds the bottom 2 rows of the PREVIOUS block row above.
-      // We blend those with the top 2 rows of the CURRENT block's template
-      // window, writing the result back into line_buf.
-      // Then add_noise_to_block applies that blended 2-row strip to the frame
-      // at the boundary between the two block rows.
-      //
-      // Corner case (x > 0 && y > 0): the 2x2 corner pixel where a left-right
-      // boundary meets a top-bottom boundary has been touched by BOTH the col
-      // buf and the line buf.  We blend them together with hor_boundary_overlap
-      // before applying to the frame.
-      //
-      // Blend weights (hor_boundary_overlap, height=2):
-      //   row 0: (27 * top  + 17 * bottom + 16) >> 5  ← mostly from block above
-      //   row 1: (17 * top  + 27 * bottom + 16) >> 5  ← mostly from current block
-      // --------------------------------------------------------------------
-      if (overlap && y) {
-        if (x) {
-          // Corner: line_buf at position x holds the bottom-right grain of the
-          // block above-left; col_buf holds the right grain of the block to
-          // the left.  Blend them so the corner has contributions from all
-          // three neighbouring blocks.
-          hor_boundary_overlap(
-              y_line_buf.data() + (x << 1), dst_y_stride,
-              y_col_buf.data(), 2,
-              y_line_buf.data() + (x << 1), dst_y_stride,
-              2, 2, grain_min_, grain_max_);
-
-          hor_boundary_overlap(
-              cb_line_buf.data() + (x << (1 - chroma_subsamp_x)), dst_cb_stride,
-              cb_col_buf.data(), 2 >> chroma_subsamp_x,
-              cb_line_buf.data() + (x << (1 - chroma_subsamp_x)), dst_cb_stride,
-              2 >> chroma_subsamp_x, 2 >> chroma_subsamp_y, grain_min_, grain_max_);
-
-          hor_boundary_overlap(
-              cr_line_buf.data() + (x << (1 - chroma_subsamp_x)), dst_cr_stride,
-              cr_col_buf.data(), 2 >> chroma_subsamp_x,
-              cr_line_buf.data() + (x << (1 - chroma_subsamp_x)), dst_cr_stride,
-              2 >> chroma_subsamp_x, 2 >> chroma_subsamp_y, grain_min_, grain_max_);
-        }
-
-        // Blend the main (non-corner) top edge of the current block against
-        // line_buf.  x1 skips the 2 corner columns already handled above.
-        const int x1 = x ? x + 1 : 0;
-        hor_boundary_overlap(
-            y_line_buf.data() + (x1 << 1), dst_y_stride,
-            luma_grain_block.data() + luma_offset_y * luma_grain_stride + luma_offset_x + (x ? 2 : 0),
-            luma_grain_stride,
-            y_line_buf.data() + (x1 << 1), dst_y_stride,
-            std::min(luma_subblock_size_x - ((x ? 1 : 0) << 1), width - (x1 << 1)),
-            2, grain_min_, grain_max_);
-
-        hor_boundary_overlap(
-            cb_line_buf.data() + (x1 << (1 - chroma_subsamp_x)), dst_cb_stride,
-            cb_grain_block.data() + chroma_offset_y * chroma_grain_stride + chroma_offset_x + ((x ? 1 : 0) << (1 - chroma_subsamp_x)),
-            chroma_grain_stride,
-            cb_line_buf.data() + (x1 << (1 - chroma_subsamp_x)), dst_cb_stride,
-            std::min(chroma_subblock_size_x - ((x ? 1 : 0) << (1 - chroma_subsamp_x)),
-                     (width - (x1 << 1)) >> chroma_subsamp_x),
-            2 >> chroma_subsamp_y, grain_min_, grain_max_);
-
-        hor_boundary_overlap(
-            cr_line_buf.data() + (x1 << (1 - chroma_subsamp_x)), dst_cr_stride,
-            cr_grain_block.data() + chroma_offset_y * chroma_grain_stride + chroma_offset_x + ((x ? 1 : 0) << (1 - chroma_subsamp_x)),
-            chroma_grain_stride,
-            cr_line_buf.data() + (x1 << (1 - chroma_subsamp_x)), dst_cr_stride,
-            std::min(chroma_subblock_size_x - ((x ? 1 : 0) << (1 - chroma_subsamp_x)),
-                     (width - (x1 << 1)) >> chroma_subsamp_x),
-            2 >> chroma_subsamp_y, grain_min_, grain_max_);
-
-        // Apply the blended top-edge strip (2 rows tall, full block width)
-        add_noise_to_block(
-            params,
-            dst_y.data()  + (y << 1) * dst_y_stride  + (x << 1),
-            dst_cb.data() + (y << (1 - chroma_subsamp_y)) * dst_cb_stride + (x << (1 - chroma_subsamp_x)),
-            dst_cr.data() + (y << (1 - chroma_subsamp_y)) * dst_cr_stride + (x << (1 - chroma_subsamp_x)),
-            dst_y_stride, dst_cb_stride,
-            y_line_buf.data()  + (x << 1),
-            cb_line_buf.data() + (x << (1 - chroma_subsamp_x)),
-            cr_line_buf.data() + (x << (1 - chroma_subsamp_x)),
-            dst_y_stride, dst_cb_stride,
-            1, std::min(luma_subblock_size_x >> 1, width / 2 - x),
-            bit_depth, chroma_subsamp_y, chroma_subsamp_x);
-      }
-
-      // --------------------------------------------------------------------
-      // Main block application.
-      //
-      // Apply the grain template window — at luma_offset_y/x — to the frame.
-      // i/j skip the overlap rows/cols already applied above so we don't
-      // touch them again (each pixel must be modified exactly once).
-      //
-      // add_noise_to_block computes for each pixel:
-      //   dst = clamp(src + (scale_LUT(src) * grain_sample + rounding) >> scaling_shift)
-      // --------------------------------------------------------------------
-      const int i = (overlap && y) ? 1 : 0; // already applied top overlap row
-      const int j = (overlap && x) ? 1 : 0; // already applied left overlap col
-
-      add_noise_to_block(
-          params,
-          dst_y.data()  + ((y + i) << 1) * dst_y_stride  + ((x + j) << 1),
-          dst_cb.data() + ((y + i) << (1 - chroma_subsamp_y)) * dst_cb_stride + ((x + j) << (1 - chroma_subsamp_x)),
-          dst_cr.data() + ((y + i) << (1 - chroma_subsamp_y)) * dst_cr_stride + ((x + j) << (1 - chroma_subsamp_x)),
-          dst_y_stride, dst_cb_stride,
-          luma_grain_block.data() + (luma_offset_y + (i << 1)) * luma_grain_stride + luma_offset_x + (j << 1),
-          cb_grain_block.data() + (chroma_offset_y + (i << (1 - chroma_subsamp_y))) * chroma_grain_stride + chroma_offset_x + (j << (1 - chroma_subsamp_x)),
-          cr_grain_block.data() + (chroma_offset_y + (i << (1 - chroma_subsamp_y))) * chroma_grain_stride + chroma_offset_x + (j << (1 - chroma_subsamp_x)),
-          luma_grain_stride, chroma_grain_stride,
-          std::min(luma_subblock_size_y >> 1, height / 2 - y) - i,
-          std::min(luma_subblock_size_x >> 1, width  / 2 - x) - j,
-          bit_depth, chroma_subsamp_y, chroma_subsamp_x);
-
-      // --------------------------------------------------------------------
-      // Save grain edges into overlap buffers for the NEXT block.
-      //
-      // line_buf ← bottom 2 rows of current block's template window
-      //            (the block below will blend its top against these)
-      //
-      // col_buf  ← right 2 columns of current block's template window
-      //            (the block to the right will blend its left against these)
-      //
-      // Corner: the bottom-right 2x2 piece goes into line_buf last, after
-      // col_buf is already populated, to form a consistent corner for the
-      // diagonal neighbour.
-      // --------------------------------------------------------------------
-      if (overlap) {
-        if (x) {
-          // col_buf[subblock_size * 2 .. end] is the bottom-right corner grain.
-          // Copy it into line_buf at position x so that when the block below
-          // processes the horizontal overlap it finds the correct corner grain.
-          copy_int_area(y_col_buf.data() + (luma_subblock_size_y << 1), 2,
-                        y_line_buf.data() + (x << 1), dst_y_stride, 2, 2);
-
-          copy_int_area(cb_col_buf.data() + (chroma_subblock_size_y << (1 - chroma_subsamp_x)),
-                        2 >> chroma_subsamp_x,
-                        cb_line_buf.data() + (x << (1 - chroma_subsamp_x)), dst_cb_stride,
-                        2 >> chroma_subsamp_x, 2 >> chroma_subsamp_y);
-
-          copy_int_area(cr_col_buf.data() + (chroma_subblock_size_y << (1 - chroma_subsamp_x)),
-                        2 >> chroma_subsamp_x,
-                        cr_line_buf.data() + (x << (1 - chroma_subsamp_x)), dst_cr_stride,
-                        2 >> chroma_subsamp_x, 2 >> chroma_subsamp_y);
-        }
-
-        // Save bottom 2 template rows → line_buf (skip leftmost 2 cols if x>0,
-        // already saved via col_buf corner copy above)
-        const int x1 = x ? x + 1 : 0;
-        copy_int_area(
-            luma_grain_block.data() + (luma_offset_y + luma_subblock_size_y) * luma_grain_stride + luma_offset_x + (x ? 2 : 0),
-            luma_grain_stride,
-            y_line_buf.data() + (x1 << 1), dst_y_stride,
-            std::min(luma_subblock_size_x, width - (x << 1)) - (x ? 2 : 0), 2);
-
-        copy_int_area(
-            cb_grain_block.data() + (chroma_offset_y + chroma_subblock_size_y) * chroma_grain_stride + chroma_offset_x + (x ? 2 >> chroma_subsamp_x : 0),
-            chroma_grain_stride,
-            cb_line_buf.data() + (x1 << (1 - chroma_subsamp_x)), dst_cb_stride,
-            std::min(chroma_subblock_size_x, (width - (x << 1)) >> chroma_subsamp_x) - (x ? 2 >> chroma_subsamp_x : 0),
-            2 >> chroma_subsamp_y);
-
-        copy_int_area(
-            cr_grain_block.data() + (chroma_offset_y + chroma_subblock_size_y) * chroma_grain_stride + chroma_offset_x + (x ? 2 >> chroma_subsamp_x : 0),
-            chroma_grain_stride,
-            cr_line_buf.data() + (x1 << (1 - chroma_subsamp_x)), dst_cr_stride,
-            std::min(chroma_subblock_size_x, (width - (x << 1)) >> chroma_subsamp_x) - (x ? 2 >> chroma_subsamp_x : 0),
-            2 >> chroma_subsamp_y);
-
-        // Save right 2 template columns → col_buf for the block to the right.
-        // +subblock_size steps past the 32px inner region to the next 32px half.
-        copy_int_area(
-            luma_grain_block.data() + luma_offset_y * luma_grain_stride + luma_offset_x + luma_subblock_size_x,
-            luma_grain_stride,
-            y_col_buf.data(), 2, 2,
-            std::min(luma_subblock_size_y + 2, height - (y << 1)));
-
-        copy_int_area(
-            cb_grain_block.data() + chroma_offset_y * chroma_grain_stride + chroma_offset_x + chroma_subblock_size_x,
-            chroma_grain_stride,
-            cb_col_buf.data(), 2 >> chroma_subsamp_x, 2 >> chroma_subsamp_x,
-            std::min(chroma_subblock_size_y + (2 >> chroma_subsamp_y),
-                     (height - (y << 1)) >> chroma_subsamp_y));
-
-        copy_int_area(
-            cr_grain_block.data() + chroma_offset_y * chroma_grain_stride + chroma_offset_x + chroma_subblock_size_x,
-            chroma_grain_stride,
-            cr_col_buf.data(), 2 >> chroma_subsamp_x, 2 >> chroma_subsamp_x,
-            std::min(chroma_subblock_size_y + (2 >> chroma_subsamp_y),
-                     (height - (y << 1)) >> chroma_subsamp_y));
-      }
-    }
-  }
+  AV1_FG_DBG("synthesizeFgSeg: seed=%u lag=%d luma=%dx%d chroma=%dx%d",
+             params.random_seed, params.ar_coeff_lag,
+             luma_block_size_y, luma_block_size_x,
+             chroma_block_size_y, chroma_block_size_x);
 
   return 0;
 }
