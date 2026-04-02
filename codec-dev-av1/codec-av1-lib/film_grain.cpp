@@ -279,6 +279,34 @@ void FilmGrainSynthesizer::init_scaling_function(
     lut[i] = pts[num_points - 1][1];
 }
 
+// ---------------------------------------------------------------------------
+// Scaling LUT synthesis — one function per plane, matching your
+// synthesizeScalingLuty / synthesizeScalingLutcb / synthesizeScalingLutcr.
+// ---------------------------------------------------------------------------
+
+void FilmGrainSynthesizer::synthesizeScalingLuty(
+    const FilmGrainParams& params, std::array<int, 256>& lut) {
+  init_scaling_function(params.scaling_points_y.data(), params.num_y_points, lut);
+}
+
+void FilmGrainSynthesizer::synthesizeScalingLutcb(
+    const FilmGrainParams& params, std::array<int, 256>& lut,
+    const std::array<int, 256>& lut_y) {
+  if (params.chroma_scaling_from_luma)
+    lut = lut_y;  // encoder says: use luma scaling for chroma (your memcpy path)
+  else
+    init_scaling_function(params.scaling_points_cb.data(), params.num_cb_points, lut);
+}
+
+void FilmGrainSynthesizer::synthesizeScalingLutcr(
+    const FilmGrainParams& params, std::array<int, 256>& lut,
+    const std::array<int, 256>& lut_y) {
+  if (params.chroma_scaling_from_luma)
+    lut = lut_y;
+  else
+    init_scaling_function(params.scaling_points_cr.data(), params.num_cr_points, lut);
+}
+
 // Specified in Section 7.18.3.3 (scale_lut process) of AV1 specification
 int FilmGrainSynthesizer::scale_LUT(const std::array<int, 256>& scaling_lut,
                                     int index, int bit_depth) {
@@ -518,15 +546,10 @@ int FilmGrainSynthesizer::synthesizeFgSeg(
                                left_pad, top_pad, right_pad, bottom_pad,
                                chroma_subsamp_y, chroma_subsamp_x);
 
-  // Scaling LUTs
-  init_scaling_function(params.scaling_points_y.data(),  params.num_y_points,  out.scaling_lut_y);
-  if (params.chroma_scaling_from_luma) {
-    out.scaling_lut_cb = out.scaling_lut_y;
-    out.scaling_lut_cr = out.scaling_lut_y;
-  } else {
-    init_scaling_function(params.scaling_points_cb.data(), params.num_cb_points, out.scaling_lut_cb);
-    init_scaling_function(params.scaling_points_cr.data(), params.num_cr_points, out.scaling_lut_cr);
-  }
+  // Scaling LUTs — called as separate steps matching your synthesizeScalingLuty/cb/cr
+  synthesizeScalingLuty (params, out.scaling_lut_y);
+  synthesizeScalingLutcb(params, out.scaling_lut_cb, out.scaling_lut_y);
+  synthesizeScalingLutcr(params, out.scaling_lut_cr, out.scaling_lut_y);
 
   // Store template dimensions for the caller
   out.luma_block_size_y   = luma_block_size_y;

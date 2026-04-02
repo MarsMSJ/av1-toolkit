@@ -107,6 +107,17 @@ private:
     int  get_random_number(int bits);
     void init_random_generator(int luma_line, uint16_t seed);
 
+    // Scaling LUT synthesis — one per plane, matching your decoder's naming.
+    // cb/cr take lut_y so they can copy it when chroma_scaling_from_luma is set.
+    void synthesizeScalingLuty (const FilmGrainParams& params,
+                                std::array<int, 256>& lut);
+    void synthesizeScalingLutcb(const FilmGrainParams& params,
+                                std::array<int, 256>& lut,
+                                const std::array<int, 256>& lut_y);
+    void synthesizeScalingLutcr(const FilmGrainParams& params,
+                                std::array<int, 256>& lut,
+                                const std::array<int, 256>& lut_y);
+
     // scaling_points is a pointer to {x, y} pairs (.data() on either the
     // 14-point luma or 10-point chroma array) — one function handles both.
     static void init_scaling_function(const std::array<int, 2>* scaling_points,
