@@ -89,10 +89,11 @@ private:
     int  get_random_number(int bits);
     void init_random_generator(int luma_line, uint16_t seed);
 
-    static void init_scaling_function(const std::array<std::array<int, 2>, 14>& scaling_points,
+    // scaling_points is a pointer to {x, y} pairs — the type .data() returns on
+    // both the 14-point (luma) and 10-point (chroma) arrays, so one function
+    // handles both without caring about the compile-time max-point count.
+    static void init_scaling_function(const std::array<int, 2>* scaling_points,
                                       int num_points, std::array<int, 256>& scaling_lut);
-    static void init_scaling_function_10(const std::array<std::array<int, 2>, 10>& scaling_points,
-                                         int num_points, std::array<int, 256>& scaling_lut);
     static int  scale_LUT(const std::array<int, 256>& scaling_lut, int index, int bit_depth);
 
     // Grain template generation (Section 7.18.3.2)
