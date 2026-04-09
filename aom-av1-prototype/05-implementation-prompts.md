@@ -4,551 +4,632 @@ These prompts are designed to be fed sequentially to MiniMax-M2.5. Each prompt p
 
 **Workflow**: Run prompt → verify output → correct if needed → feed corrected output into next prompt.
 
+**Key constraints** (see `00-decisions.md`):
+- Queue depth is serial (no parallel frame decode)
+- AU = TD-to-TD (all OBUs between temporal delimiters)
+- malloc override is acceptable (no custom allocator needed initially)
+- 200µs budget is a future optimization, not a requirement now
+- GPU thread is about CPU offload, not raw speed
+- Film grain is a GPU shader writing directly to dst with format conversion
+
 ---
 
-## Prompt 1: Pool Allocator
+## Prompt 1: malloc/memalign/free Override Layer
 
 ```
-You are implementing a fixed-memory pool allocator for an AV1 video decoder.
-This allocator operates on a single contiguous memory block provided by the caller.
-It must never call malloc/free/calloc/realloc.
+You are implementing a memory override layer for the AOM AV1 reference decoder.
 
-Implement the following in C (C11, no C++ features):
+The goal: redirect all aom_malloc / aom_memalign / aom_free calls to allocate
+from a single contiguous memory block provided by the caller at decoder creation.
 
-File: av1_pool_allocator.h / av1_pool_allocator.c
+This is NOT a full custom allocator rewrite. We are overriding the existing
+AOM allocation functions so all internal allocations route through our block.
 
-1. A bump allocator for init-time allocations:
-   - av1_pool_init(Av1PoolAllocator *alloc, void *base, size_t size)
-   - void *av1_pool_bump_alloc(Av1PoolAllocator *alloc, size_t size, size_t alignment)
-     Returns NULL if out of space. Advances internal offset.
-     All pointers must be aligned to the requested alignment.
+File: av1_mem_override.h / av1_mem_override.c
 
-2. A fixed-slot sub-allocator for frame buffers:
-   - av1_pool_init_frame_slots(Av1PoolAllocator *alloc, int num_slots, size_t slot_size)
-     Carves num_slots × slot_size from the bump allocator.
-   - int av1_pool_acquire_frame_slot(Av1PoolAllocator *alloc)
-     Returns slot index (0..num_slots-1) or -1 if all occupied.
-     Uses an atomic bitmask for thread safety.
-   - void av1_pool_release_frame_slot(Av1PoolAllocator *alloc, int slot_index)
-     Marks slot as free via atomic bitmask.
-   - void *av1_pool_get_frame_slot_ptr(Av1PoolAllocator *alloc, int slot_index)
-     Returns pointer to slot's memory.
+Approach:
+1. The caller provides a memory block (base pointer + size) at create time.
+2. We implement a simple bump allocator + free-list on top of this block.
+3. We override aom_malloc, aom_memalign, aom_calloc, aom_free by replacing
+   the implementations in aom_mem/aom_mem.c (or via function pointers).
 
-3. A debug/query function:
-   - size_t av1_pool_bytes_used(const Av1PoolAllocator *alloc)
-   - size_t av1_pool_bytes_remaining(const Av1PoolAllocator *alloc)
+Functions:
+- av1_mem_init(void *base, size_t size)
+  Initialize the allocator state at the start of the memory block.
+  Uses a small header region for bookkeeping.
+
+- void *av1_mem_malloc(size_t size)
+  Allocate from the block. Simple bump with free-list fallback.
+
+- void *av1_mem_memalign(size_t align, size_t size)
+  Aligned allocation from the block.
+
+- void *av1_mem_calloc(size_t num, size_t size)
+  Zero-initialized allocation.
+
+- void av1_mem_free(void *ptr)
+  Return to free-list (or no-op for bump-only mode).
+
+- size_t av1_mem_query_size(const Av1StreamInfo *info, int queue_depth, int num_workers)
+  Estimate total memory needed. This drives av1_query_memory().
+  Use the formulas below:
+
+  frame_size = ALIGN64(width) × ALIGN64(height) × bps × chroma_factor
+  dpb_count  = 8 + queue_depth + 1
+  dpb_total  = dpb_count × (frame_size + overhead_per_frame)
+  scratch    = num_workers × PER_WORKER_SCRATCH
+  overhead   = decoder_context + entropy_contexts + tables
+  total      = dpb_total + scratch + overhead + 10% headroom
+
+Integration with AOM:
+- In aom_mem/aom_mem.c, the existing functions call our overrides when
+  a global "use_pool" flag is set (set during av1_create_decoder).
+- When use_pool is false (e.g., encoder path), original malloc behavior is used.
 
 Requirements:
-- Thread-safe slot acquire/release using C11 atomics (_Atomic, atomic_fetch_or, etc.)
-- Bump allocator is NOT thread-safe (only called during single-threaded init)
-- Max 32 frame slots (use uint32_t bitmask)
-- Include static_assert that num_slots <= 32
-- No external dependencies except <stdint.h>, <stddef.h>, <stdatomic.h>, <string.h>
-- Write a test main() that: allocates a 64MB block, inits the pool, bumps several
-  allocations with different alignments, creates 17 frame slots of 1MB each,
-  acquires all 17, verifies the 18th fails, releases slot 5, re-acquires
-  successfully, and prints bytes used/remaining.
+- Thread-safe (multiple worker threads may allocate concurrently during decode)
+- Use a mutex for the allocator (simplicity over speed — this is reference code)
+- Track peak usage for debugging
+- Write a test that: creates a 256MB block, inits the allocator, performs 1000
+  random-sized allocations (1 byte to 1MB) with random alignments (1/4/16/64),
+  frees half of them, allocates 500 more, prints peak usage and fragmentation.
 ```
 
 ### Verification checklist for Prompt 1:
-- [ ] Bump allocator respects alignment (test with 1, 4, 16, 64 byte alignments)
-- [ ] Frame slot acquire returns -1 when full
-- [ ] Frame slot release + re-acquire works
-- [ ] No calls to malloc/free anywhere
-- [ ] Compiles with: `gcc -std=c11 -Wall -Wextra -pthread -o test av1_pool_allocator.c`
-- [ ] Test main() runs clean under valgrind (no leaks — because no mallocs)
+- [ ] All allocations come from the provided block (verify no malloc calls via ltrace/strace)
+- [ ] Aligned allocations are actually aligned (test with 64-byte alignment)
+- [ ] Thread-safe under concurrent allocations (test with 4 threads)
+- [ ] Free + re-allocate works (freed memory can be reused)
+- [ ] Query size produces reasonable numbers for 1080p and 4K
+- [ ] Compiles with: `gcc -std=c11 -Wall -Wextra -pthread`
 
 ---
 
-## Prompt 2: Lock-Free Ring Buffer (Job Queue)
+## Prompt 2: Job Queue (Simple Mutex-Based)
 
 ```
-Implement a fixed-size, single-producer single-consumer (SPSC) lock-free ring buffer in C11.
-This will be used as the job queue between the decoder API thread and worker threads.
+Implement a simple thread-safe job queue for the AV1 decoder.
+
+Since the pipeline is SERIAL (one frame decoded at a time), this queue holds
+completed frames waiting for the application to pick them up via av1_sync()
+and eventually av1_set_output() / av1_receive_output().
 
 File: av1_job_queue.h / av1_job_queue.c
 
-The ring buffer stores opaque job entries of a fixed size.
+This is a simple fixed-size circular buffer protected by a mutex + condvar.
+No need for lock-free — this is reference code prioritizing correctness.
 
-API:
-- av1_queue_init(Av1Queue *q, void *storage, int capacity, size_t entry_size)
-  storage is pre-allocated memory (from the pool allocator).
-  capacity must be a power of 2.
+typedef struct Av1FrameEntry {
+    uint32_t frame_id;
+    int      dpb_slot;
+    int      show_frame;
+    int      show_existing_frame;
+} Av1FrameEntry;
 
-- int av1_queue_push(Av1Queue *q, const void *entry)
-  Returns 1 on success, 0 if full.
-  Copies entry_size bytes from entry into the ring.
-  Uses atomic store with release semantics on write_idx.
+typedef struct Av1FrameQueue {
+    Av1FrameEntry *entries;      // circular buffer [capacity]
+    int            capacity;     // max entries (= queue_depth)
+    int            head;         // next to dequeue
+    int            tail;         // next to enqueue
+    int            count;        // current entries
+    pthread_mutex_t mutex;
+    pthread_cond_t  not_empty;   // signaled when entry is enqueued
+    pthread_cond_t  not_full;    // signaled when entry is dequeued
+} Av1FrameQueue;
 
-- int av1_queue_pop(Av1Queue *q, void *out_entry)
-  Returns 1 on success, 0 if empty.
-  Copies entry_size bytes into out_entry.
-  Uses atomic load with acquire semantics on write_idx.
-  Uses atomic store with release semantics on read_idx.
+Functions:
+- av1_frame_queue_init(Av1FrameQueue *q, Av1FrameEntry *storage, int capacity)
+- int av1_frame_queue_push(Av1FrameQueue *q, const Av1FrameEntry *entry)
+  Returns 0 on success, -1 if full (non-blocking).
+- int av1_frame_queue_pop(Av1FrameQueue *q, Av1FrameEntry *out, uint32_t timeout_us)
+  Returns 0 on success, -1 on timeout. timeout_us=0 means non-blocking poll.
+  Uses pthread_cond_timedwait for timeout > 0.
+- int av1_frame_queue_count(Av1FrameQueue *q)
+- int av1_frame_queue_is_full(Av1FrameQueue *q)
+- void av1_frame_queue_destroy(Av1FrameQueue *q)
 
-- int av1_queue_count(const Av1Queue *q)
-  Returns number of entries currently in the queue.
-
-- int av1_queue_is_full(const Av1Queue *q)
-- int av1_queue_is_empty(const Av1Queue *q)
-
-For the multi-producer case (multiple workers posting to ready queue), implement:
-
-- av1_mpsc_queue_init(...)  — multiple producer, single consumer
-  Uses a spinlock (atomic_flag) for producers; consumer is lock-free.
-- int av1_mpsc_queue_push(Av1MpscQueue *q, const void *entry)
-- int av1_mpsc_queue_pop(Av1MpscQueue *q, void *out_entry)
-
-Requirements:
-- C11 atomics only. No pthread mutexes for the SPSC queue.
-- Memory ordering: use memory_order_acquire / memory_order_release appropriately.
-- The MPSC spinlock must use atomic_flag_test_and_set / atomic_flag_clear.
-- Write a test that spawns 2 threads: producer pushes 1M entries, consumer pops
-  1M entries. Verify all entries received in order (SPSC) and all received (MPSC).
+Write a test that:
+  - Creates a queue with capacity 8
+  - Pushes 8 entries, verifies 9th push returns -1 (full)
+  - Pops 3, verifies correct FIFO order
+  - Pushes 3 more, pops all 8, verifies order
+  - Tests timeout: pop on empty queue with 100ms timeout returns -1
+  - Two-thread test: producer pushes 1000 entries with small delays,
+    consumer pops 1000 entries. Verify all received in order.
 ```
 
 ### Verification checklist for Prompt 2:
-- [ ] SPSC: producer/consumer stress test with 1M entries passes
-- [ ] MPSC: multiple producers, single consumer, all entries received
-- [ ] No data races under ThreadSanitizer: `gcc -fsanitize=thread`
-- [ ] Queue full/empty edge cases handled
-- [ ] Power-of-2 capacity enforced (assert or error)
+- [ ] FIFO order preserved
+- [ ] Full detection works (push returns -1)
+- [ ] Timeout works (pop returns -1 after specified time)
+- [ ] Non-blocking poll (timeout=0) returns immediately
+- [ ] Two-thread stress test passes under ThreadSanitizer
+- [ ] Destroy cleans up mutex/condvar
 
 ---
 
-## Prompt 3: av1_query_memory Implementation
+## Prompt 3: av1_query_memory and av1_create_decoder
 
 ```
-Implement the av1_query_memory function for an AV1 decoder.
+Implement av1_query_memory and av1_create_decoder for the AV1 decoder.
 
-Given stream characteristics (width, height, bit_depth, chroma subsampling,
-monochrome flag) and pipeline configuration (queue_depth, num_worker_threads),
-compute the total memory needed.
+Context:
+- The decoder pipeline is SERIAL — one frame decoded at a time.
+- Queue depth = how many decoded frames can wait for output pickup.
+- An AU is defined as all OBUs from one Temporal Delimiter to the next.
+- Memory allocation uses the override layer from Prompt 1 (malloc redirect).
+- Worker threads, copy thread, and optionally a GPU thread are created here.
 
-File: av1_memory_calc.h / av1_memory_calc.c
+File: av1_decoder_api.h / av1_decoder_api.c
 
-Use these formulas:
+### av1_query_memory
 
-1. Frame buffer size:
-   aligned_width  = ALIGN(width, 64)   // AV1 superblock alignment
-   aligned_height = ALIGN(height, 64)
-   bytes_per_sample = (bit_depth > 8) ? 2 : 1
-   luma_size = aligned_width * aligned_height * bytes_per_sample
-   chroma_size = (monochrome) ? 0 :
-       (aligned_width >> subsampling_x) * (aligned_height >> subsampling_y) * bytes_per_sample
-   frame_size = luma_size + 2 * chroma_size
-   // Add border pixels (AOM uses 128 pixel border for motion compensation)
-   border = 128
-   bordered_width  = aligned_width  + 2 * border
-   bordered_height = aligned_height + 2 * border
-   // Recompute with borders for actual allocation
+Input: Av1StreamInfo (max_width, max_height, bit_depth, chroma_subsampling,
+       monochrome) + queue_depth + num_worker_threads
 
-2. Per-frame overhead:
-   mv_buffer  = (aligned_width/8) * (aligned_height/8) * sizeof(MV_REF)  // ~12 bytes each
-   seg_map    = (aligned_width/4) * (aligned_height/4) * 1
-   grain_buf  = frame_size  // film grain needs a separate output buffer
+Output: Av1MemoryRequirements { total_size, alignment, breakdown... }
 
-3. DPB:
-   dpb_count = 8 + queue_depth + 1  // REF_FRAMES + pipeline + safety
-   dpb_total = dpb_count * (frame_size_with_borders + mv_buffer + seg_map + grain_buf)
+Implementation:
+  1. Compute frame buffer size (with 128-pixel border for MC)
+  2. Compute DPB: (8 + queue_depth + 1) frame buffers
+  3. Compute per-worker scratch (MC temp, convolution, OBMC buffers)
+  4. Compute entropy context storage (queue_depth × ~75KB)
+  5. Compute decoder context + tile data + mode info grid
+  6. Sum with 10% headroom, 64-byte alignment requirement
 
-4. Worker scratch (per worker):
-   mc_buf         = 2 * (128+8)*(128+8) * bytes_per_sample  // motion comp temp
-   tmp_conv_dst   = 128 * 128 * sizeof(int32_t)
-   obmc_bufs      = 2 * 128 * 128 * bytes_per_sample
-   seg_mask       = 128 * 128 * 2
-   worker_scratch = mc_buf + tmp_conv_dst + obmc_bufs + seg_mask + 4096 // padding
-   total_scratch  = num_workers * worker_scratch
+### av1_create_decoder
 
-5. Entropy context:
-   frame_context_size = 75000  // approximate sizeof(FRAME_CONTEXT) ~73KB
-   entropy_total = queue_depth * frame_context_size
+Input: Av1DecoderConfig { memory_base, memory_size, queue_depth,
+       num_worker_threads, thread priorities/affinities, use_gpu, gpu_device }
 
-6. Decoder context + mode info:
-   mi_size = (aligned_width/4) * (aligned_height/4) * 48  // approximate MB_MODE_INFO
-   context_total = 65536 + mi_size  // decoder struct + tile data + tables
+Output: Av1Decoder handle
 
-7. Queues:
-   queue_total = 3 * queue_depth * 256 + 4096  // 3 queues + sync primitives
+Implementation:
+  1. Validate: memory_size >= what query_memory would return
+  2. Call av1_mem_init(memory_base, memory_size) to set up allocator
+  3. Set global "use_pool" flag so aom_malloc routes to our block
+  4. Allocate and zero-init the Av1Decoder struct (via redirected aom_memalign)
+  5. Initialize internal AOM state:
+     - Call the existing AOM decoder init path (decoder_init from av1_dx_iface.c)
+     - This internally allocates AV1Decoder, AV1_COMMON, BufferPool, etc.
+       through our redirected malloc
+  6. Initialize the ready queue (Av1FrameQueue from Prompt 2)
+  7. Create worker threads (reuse AOM's existing tile worker creation)
+  8. Create copy thread
+  9. Optionally create GPU thread stub (if use_gpu=1)
+  10. Set state to CREATED
+  11. Return handle
 
-8. Alignment padding:
-   padding = total * 0.05  // 5% headroom
+Error handling:
+  - If any step fails, clean up everything done so far
+  - Join any threads already created
+  - Return appropriate error code
 
-Fill out an Av1MemoryRequirements struct with total and per-category breakdowns.
-
-Write a test that queries memory for:
-  - 1080p, 8-bit, 4:2:0, queue_depth=4, workers=4
-  - 4K, 10-bit, 4:2:0, queue_depth=8, workers=8
-  - 8K, 10-bit, 4:4:4, queue_depth=16, workers=16
-Print the total and breakdown for each.
+Write a test that:
+  - Queries memory for 1080p 8-bit 4:2:0, queue_depth=4, 4 workers
+  - Allocates the memory (aligned_alloc)
+  - Creates the decoder
+  - Verifies decoder handle is non-NULL
+  - Destroys (placeholder — just free for now)
+  - Prints memory breakdown
 ```
 
 ### Verification checklist for Prompt 3:
-- [ ] 1080p 8-bit result is in the range ~150–300 MB
-- [ ] 4K 10-bit result is in the range ~1–2 GB
-- [ ] 8K 10-bit 4:4:4 result is in the range ~8–16 GB (expect large)
-- [ ] Alignment macro works correctly
-- [ ] No integer overflow for large resolutions (use size_t throughout)
+- [ ] Query returns reasonable sizes (1080p ~150-300MB, 4K ~1-2GB)
+- [ ] Create succeeds when given enough memory
+- [ ] Create fails gracefully when given insufficient memory
+- [ ] All AOM internal state is initialized (no crashes on subsequent decode)
+- [ ] Threads are created and running (verify with pthread or ps)
+- [ ] No system malloc calls during create (all through override)
 
 ---
 
-## Prompt 4: Copy Thread Implementation
+## Prompt 4: Copy Thread
 
 ```
 Implement the copy thread for the AV1 decoder.
 
-The copy thread runs in a loop waiting for copy jobs. When the application calls
-av1_set_output(), a copy job is enqueued. The copy thread performs the plane-by-plane
-memcpy and signals completion so av1_receive_output() can return.
+The copy thread services SET OUTPUT / RECEIVE OUTPUT. When the app provides
+a destination buffer via av1_set_output(), a copy job is enqueued. The copy
+thread copies plane-by-plane and signals completion.
+
+In GPU mode (stretch goal), the copy thread instead dispatches a GPU shader
+that performs film grain synthesis + format conversion + copy in one pass.
+For now, implement CPU-only copy. The GPU path is a future extension point.
 
 File: av1_copy_thread.h / av1_copy_thread.c
 
 Structures:
 typedef struct Av1CopyJob {
     uint32_t frame_id;
-    int      dpb_slot;           // source DPB slot index
-    void    *src_planes[3];      // Y, U, V source pointers
-    int      src_strides[3];     // source strides
-    void    *dst_planes[3];      // Y, U, V destination pointers
-    int      dst_strides[3];     // destination strides
-    int      plane_widths[3];    // bytes to copy per row
-    int      plane_heights[3];   // number of rows per plane
-    _Atomic int status;          // 0=pending, 1=in_progress, 2=complete
+    int      dpb_slot;
+    // Source (internal DPB frame buffer)
+    const uint8_t *src_planes[3];
+    int      src_strides[3];
+    // Destination (caller-provided buffer)
+    uint8_t *dst_planes[3];
+    int      dst_strides[3];
+    // Dimensions
+    int      plane_widths[3];    // copy width in bytes per plane
+    int      plane_heights[3];   // rows per plane
+    // Status
+    _Atomic int status;          // PENDING=0, IN_PROGRESS=1, COMPLETE=2
 } Av1CopyJob;
 
-typedef struct Av1CopyThread {
-    pthread_t       thread;
-    pthread_mutex_t mutex;
-    pthread_cond_t  cond;
-    pthread_cond_t  done_cond;   // signaled when a copy completes
-    Av1CopyJob     *jobs;        // circular buffer [queue_depth]
-    int             queue_depth;
-    int             head, tail;
-    int             exit_flag;
-    int             priority;    // OS thread priority to set
-} Av1CopyThread;
+Thread loop:
+  1. Wait on condvar for a job
+  2. Dequeue job, set status = IN_PROGRESS
+  3. For each plane (Y, U, V):
+       For each row:
+         memcpy(dst_row, src_row, width_bytes)
+  4. Set status = COMPLETE (atomic store)
+  5. Broadcast completion condvar
 
-Functions:
-- av1_copy_thread_init(Av1CopyThread *ct, void *job_storage, int queue_depth, int priority)
-  Creates and starts the thread with the given priority.
-- av1_copy_thread_enqueue(Av1CopyThread *ct, const Av1CopyJob *job)
-  Enqueues a copy job. Returns 0 on success.
-- int av1_copy_thread_wait(Av1CopyThread *ct, uint32_t frame_id, uint32_t timeout_us)
-  Blocks until the job with matching frame_id has status==complete.
-  Returns 0 on success, -1 on timeout.
-- av1_copy_thread_destroy(Av1CopyThread *ct)
-  Sets exit_flag, signals cond, joins thread.
+av1_set_output():
+  - Populate an Av1CopyJob from the DPB slot and caller's Av1OutputBuffer
+  - Enqueue to copy thread
 
-The copy loop:
-  1. Lock mutex
-  2. While queue empty and !exit_flag: wait on cond
-  3. Dequeue job, set status=in_progress, unlock mutex
-  4. memcpy each plane row by row
-  5. Set status=complete (atomic store)
-  6. Broadcast done_cond
-  7. Repeat
+av1_receive_output():
+  - Wait until the job for frame_id has status == COMPLETE
+  - Release the DPB slot reference (decrease_ref_count)
+  - Return AV1_OK
 
 Write a test that:
-  - Creates a copy thread with queue_depth=4
-  - Allocates two 1920×1080 YUV420 buffers (src filled with pattern, dst zeroed)
-  - Enqueues a copy job
-  - Waits for completion
-  - Verifies dst matches src byte-for-byte
-  - Enqueues 4 jobs rapidly, waits for each
-  - Destroys the thread cleanly
+  - Creates a copy thread
+  - Fills a 1920×1080 YUV420 source with a known pattern
+  - Provides a zeroed destination buffer
+  - Enqueues a copy, waits for completion
+  - Verifies dst == src byte-for-byte
+  - Tests: enqueue 4 copies back-to-back, wait for all
+  - Tests: destroy thread while idle (clean shutdown)
+  - Tests: destroy thread while copy is in-flight (waits for current job)
 ```
 
 ### Verification checklist for Prompt 4:
-- [ ] Copy produces byte-identical output
-- [ ] Thread exits cleanly (no hangs on destroy)
-- [ ] Multiple rapid enqueues work without corruption
+- [ ] Byte-identical copy (memcmp src vs dst)
+- [ ] Multiple sequential copies work
+- [ ] Clean shutdown (no thread leak, no hang)
 - [ ] ThreadSanitizer clean
-- [ ] Timeout path works (enqueue nothing, wait with 100ms timeout → returns -1)
+- [ ] Atomic status transitions are correct
 
 ---
 
-## Prompt 5: av1_decode — OBU Parse / Enqueue Split
+## Prompt 5: av1_decode — Serial Decode with AU = TD-to-TD
 
 ```
-This prompt modifies AOM reference decoder code. You are given the existing function
-aom_decode_frame_from_obus() from av1/decoder/obu.c.
+Implement av1_decode() for the AV1 decoder.
 
-Your task: split this function into two parts:
+Key constraints:
+- The pipeline is SERIAL — decode one frame at a time, fully, before accepting
+  the next DECODE call. (Async decode is a future optimization.)
+- An AU is all OBUs from one Temporal Delimiter to the next.
+- If the ready queue is full (queue_depth frames waiting for pickup),
+  return AV1_QUEUE_FULL.
+- On success, the decoded frame is placed in the ready queue for av1_sync()
+  to pick up.
 
-Part A: av1_parse_obu_headers_and_setup() — runs on the caller thread
-  - Parses OBU headers (temporal delimiter, sequence header, frame header)
-  - Calls av1_decode_frame_headers_and_setup() to set up frame params
-  - Handles show_existing_frame (returns immediately with frame ready)
-  - Locates tile group data pointers and sizes
-  - Does NOT call av1_decode_tg_tiles_and_wrapup()
-  - Returns a job descriptor containing all info needed for async decode
+File: av1_decoder_api.c (add to existing)
 
-Part B: av1_async_decode_tiles(DecodeJob *job) — runs on a worker thread
-  - Calls av1_decode_tg_tiles_and_wrapup() using the job descriptor
-  - When complete, enqueues the frame_id to the ready queue
+av1_decode(decoder, data, data_size, out_result):
+  1. If decoder state != CREATED and != DECODING → return INVALID_PARAM
+  2. Set state = DECODING
+  3. If ready queue is full → return AV1_QUEUE_FULL
+  4. Call the existing AOM decode path:
+     - This is the existing aom_codec_decode() internally, which calls
+       aom_decode_frame_from_obus() → av1_decode_frame_headers_and_setup()
+       → av1_decode_tg_tiles_and_wrapup()
+     - For now, this runs SYNCHRONOUSLY on the caller's thread. That's fine.
+  5. After decode completes:
+     - If show_frame or show_existing_frame:
+       a. Assign a frame_id (monotonic counter)
+       b. Push {frame_id, dpb_slot, show_frame, show_existing} to ready queue
+       c. Fill out_result: frame_ready=1, frame_id, show_existing_frame flag
+     - If !show_frame (non-displayed reference-only frame):
+       a. Fill out_result: frame_ready=0
+  6. Return AV1_OK
 
-Define the DecodeJob structure that bridges Part A and Part B:
-typedef struct Av1DecodeJob {
-    uint32_t       frame_id;
-    int            dpb_slot;
-    int            show_frame;
-    int            show_existing_frame;
-    // Tile group info
-    const uint8_t *tile_data;
-    size_t         tile_data_size;
-    int            start_tile;
-    int            end_tile;
-    // Frame-level pointers (already set up by Part A)
-    AV1Decoder    *decoder;      // internal decoder state
-    // Ready queue to post result to
-    Av1MpscQueue  *ready_queue;
-} Av1DecodeJob;
+How to integrate with AOM internals:
+  - We wrap the existing AOM codec interface. Internally, the Av1Decoder holds
+    an aom_codec_ctx_t that we initialized in av1_create_decoder.
+  - av1_decode() calls aom_codec_decode() on that internal context.
+  - After decode, we check if aom_codec_get_frame() returns a frame.
+  - If it does, we grab the YV12_BUFFER_CONFIG pointer and DPB slot info
+    and enqueue to our ready queue.
 
-Write PSEUDOCODE (not compilable code) showing:
-1. The exact lines from aom_decode_frame_from_obus() that go in Part A vs Part B
-2. How the DecodeJob is populated between them
-3. How show_existing_frame is handled as a fast path
+Show_existing_frame handling:
+  - AOM handles this internally — aom_codec_decode() will produce an output
+    frame via aom_codec_get_frame() for show_existing. No special path needed
+    on our side. We just check if a frame came out.
 
-Reference the AOM source code structure. Use line references from obu.c where possible.
-This is a design document, not final code. The implementer will use this to make the
-actual modifications.
+Write a test that:
+  - Creates decoder (from Prompt 3)
+  - Reads a .ivf file (provide an IVF parser: read header, then read frames)
+  - Calls av1_decode() for each frame
+  - Checks out_result.frame_ready
+  - For now, don't do set_output/receive_output — just verify frames are
+    queued and queue_full works when we don't drain
+  - Decode queue_depth+1 frames without draining → verify QUEUE_FULL on last
 ```
 
 ### Verification checklist for Prompt 5:
-- [ ] Part A contains ONLY parsing and setup — no entropy, no recon, no filtering
-- [ ] Part B contains the full tile decode + filter + wrapup pipeline
-- [ ] show_existing_frame handled entirely in Part A (no worker dispatch needed)
-- [ ] DecodeJob contains all data Part B needs without re-parsing the bitstream
-- [ ] Multi-tile-group OBUs are accounted for (AV1 allows multiple tile groups per frame)
+- [ ] Decodes AV1 bitstream without crashing
+- [ ] Frame ready flag set correctly for show_frame / show_existing
+- [ ] Non-display frames (reference only) produce frame_ready=0
+- [ ] QUEUE_FULL returned when ready queue is full
+- [ ] Frame IDs are monotonically increasing
+- [ ] State transitions correct (CREATED → DECODING)
 
 ---
 
-## Prompt 6: av1_create_decoder — Full Initialization
+## Prompt 6: av1_sync, av1_set_output, av1_receive_output
 
 ```
-Write pseudocode/detailed design for av1_create_decoder().
+Implement the output retrieval pipeline.
 
-This function must:
-1. Validate config (memory_size >= what query_memory said, queue_depth > 0, etc.)
-2. Initialize the pool allocator on config->memory_base
-3. Bump-allocate the Av1Decoder struct (aligned 64)
-4. Initialize the frame slot allocator (dpb_count slots of frame_size)
-5. Bump-allocate per-worker scratch buffers (num_worker_threads sets)
-6. Bump-allocate entropy contexts (queue_depth × FRAME_CONTEXT)
-7. Bump-allocate job queues (decode queue, ready queue, copy queue)
-8. Initialize the internal AOM decoder state:
-   - Zero and configure AV1Decoder fields
-   - Initialize AV1_COMMON (reference frame map, buffer pool pointing to slot allocator)
-   - Initialize FRAME_CONTEXT with default CDFs
-9. Create worker threads with requested affinity and priority
-10. Create copy thread with requested priority
-11. Optionally create GPU thread if config->use_gpu
-12. Set decoder state to CREATED
-13. Return AV1_OK and set *out_decoder
+av1_sync(decoder, timeout_us, out_result):
+  1. Pop from ready queue (using timeout from Prompt 2's queue)
+  2. If got a frame: fill out_result, return AV1_OK
+  3. If timeout and no frame: return AV1_NEED_MORE_DATA
+  4. If state==FLUSHING and ready queue empty: return AV1_END_OF_STREAM
 
-For thread creation, use pthreads:
-- pthread_create for each worker
-- pthread_attr_setschedparam for priority
-- Use platform-specific affinity (pthread_setaffinity_np on Linux,
-  thread_policy_set on macOS — abstract behind a helper)
+av1_set_output(decoder, frame_id, output_buffer):
+  1. Look up the frame by frame_id (it was dequeued by av1_sync into a
+     "pending output" slot or lookup table)
+  2. Get the DPB slot's YV12_BUFFER_CONFIG (source planes, strides)
+  3. Build an Av1CopyJob from source + output_buffer destination
+  4. Enqueue to copy thread (from Prompt 4)
+  5. Return AV1_OK
 
-Show the initialization order and what happens if any step fails (cleanup).
+av1_receive_output(decoder, frame_id, timeout_us):
+  1. Wait for the copy job with this frame_id to reach status COMPLETE
+  2. Release the DPB reference (ref_count--)
+  3. Return AV1_OK (or timeout error)
 
-This is pseudocode/design. Show the memory layout after init completes:
-[Av1Decoder struct | DPB slots 0..N | Worker scratch 0..M | Entropy ctxs | Queues | ...]
+Data flow:
+  av1_decode → ready_queue → av1_sync → pending_output → av1_set_output
+  → copy_thread → av1_receive_output → done, DPB slot freed
+
+The "pending output" is a small array (queue_depth entries) mapping
+frame_id → dpb_slot + copy_job. av1_sync moves entries from ready_queue
+to this array. av1_set_output triggers the copy. av1_receive_output
+waits and cleans up.
+
+Write a test (end-to-end):
+  - Create decoder
+  - Read .ivf file, decode each frame
+  - After each av1_decode that returns frame_ready:
+    - av1_sync (should return immediately since we just decoded)
+    - av1_set_output with a malloc'd YUV buffer
+    - av1_receive_output (blocks until copy done)
+    - Write output to .y4m file
+  - Compare output .y4m against reference (decoded by aomdec)
+  - This is the CONFORMANCE test — output must be bit-exact
 ```
 
 ### Verification checklist for Prompt 6:
-- [ ] Memory layout is sequential with proper alignment between sections
-- [ ] Failure at any step cleans up (joins threads, etc.) before returning error
-- [ ] Pool allocator bytes_used after init < memory_size
-- [ ] Thread priorities are set correctly per platform
-- [ ] AOM internal state (AV1_COMMON, BufferPool) is properly initialized
-- [ ] No calls to aom_malloc anywhere — all from pool
+- [ ] Full decode → sync → set_output → receive_output pipeline works
+- [ ] Output is bit-exact with aomdec reference output
+- [ ] Multiple frames decoded and output correctly
+- [ ] DPB slots are freed after receive_output (no leak / exhaustion)
+- [ ] Timeout works on av1_sync and av1_receive_output
 
 ---
 
-## Prompt 7: av1_sync, av1_flush, av1_destroy — Lifecycle Completion
+## Prompt 7: av1_flush and av1_destroy_decoder
 
 ```
-Write the implementation design for the remaining API functions.
-
-av1_sync(decoder, timeout_us, out_result):
-  1. Check ready queue (non-blocking pop)
-  2. If frame available: fill out_result with frame_id, frame_ready=1, return AV1_OK
-  3. If timeout_us == 0: return AV1_NEED_MORE_DATA
-  4. If timeout_us > 0: wait on ready_queue condvar with timeout
-  5. If decoder is in FLUSHING state and ready_queue empty and work_queue empty:
-     return AV1_END_OF_STREAM
-  6. Handle show_existing_frame: these appear on ready_queue immediately after
-     av1_decode() enqueues them.
+Implement the cleanup functions.
 
 av1_flush(decoder):
-  1. Set decoder state to FLUSHING
-  2. Signal all worker threads to drain their current jobs
-  3. Do NOT accept new av1_decode() calls (return error if called)
-  4. Return AV1_OK
+  1. Set state = FLUSHING
+  2. The serial pipeline means there's no in-flight async work to drain.
+     All decoded frames are already in the ready queue.
+  3. Reject any subsequent av1_decode() calls (return error).
+  4. The application must drain remaining frames via av1_sync → av1_set_output
+     → av1_receive_output until av1_sync returns AV1_END_OF_STREAM.
+  5. Return AV1_OK
 
 av1_destroy_decoder(decoder):
-  1. If not already flushed, flush first
-  2. Set exit flags on all threads (workers, copy, gpu)
-  3. Signal all condition variables
-  4. Join all threads (pthread_join)
-  5. Zero out the decoder struct (security: wipe state)
-  6. Return AV1_OK
-  7. After this, caller may free the memory block
+  1. If not flushed, flush first (or just force-drain)
+  2. Wait for any in-progress copy to complete
+  3. Signal copy thread to exit, join it
+  4. Signal worker threads to exit, join them (reuse AOM's thread cleanup)
+  5. If GPU thread exists, signal and join it
+  6. Destroy internal AOM codec context (aom_codec_destroy)
+  7. Destroy mutexes, condvars
+  8. Zero the decoder struct (security wipe)
+  9. Clear the "use_pool" flag (restore normal malloc)
+  10. Return AV1_OK
+  11. Caller may now free the memory block
 
-Error handling table:
-  - av1_decode when state != DECODING/CREATED → AV1_ERROR_INVALID_PARAM
-  - av1_sync when state == UNINITIALIZED → AV1_ERROR_INVALID_PARAM
-  - av1_set_output with invalid frame_id → AV1_ERROR_INVALID_PARAM
-  - av1_receive_output when no set_output was called → AV1_ERROR_INVALID_PARAM
+Error states to handle:
+  - Destroy while copy in progress → wait for copy, then destroy
+  - Destroy without prior flush → implicit flush + discard remaining frames
+  - Double destroy → return error or no-op
+
+Write a test:
+  - Normal: decode 10 frames → flush → drain all → destroy → free memory
+  - Early destroy: decode 5 frames → destroy without flush → verify no hang/leak
+  - Empty: create → destroy immediately (no decodes) → verify clean
 ```
 
 ### Verification checklist for Prompt 7:
-- [ ] av1_sync with timeout=0 never blocks
-- [ ] av1_sync with timeout correctly uses timed wait
-- [ ] Flush → repeated sync eventually returns END_OF_STREAM
-- [ ] Destroy joins all threads without deadlock
-- [ ] State transitions match the state machine in 02-state-machine.md
+- [ ] Flush + drain cycle works (END_OF_STREAM returned correctly)
+- [ ] Destroy after flush is clean
+- [ ] Destroy without flush doesn't hang
+- [ ] Destroy with no decodes doesn't crash
+- [ ] No thread leaks (all threads joined)
+- [ ] AddressSanitizer clean (no leaks)
 
 ---
 
-## Prompt 8: GPU Thread Design — Symbol Buffer Interface
+## Prompt 8: GPU Thread Stub
 
 ```
-Design the GPU thread and its interface with the CPU entropy decode workers.
+Implement a GPU thread STUB for the AV1 decoder.
 
-Context: In GPU-assisted mode, CPU workers perform ONLY entropy/CABAC decoding.
-The result (decoded symbols: coefficients, mode info, motion vectors) is written
-into a "symbol buffer." The GPU thread picks up this buffer, uploads it to GPU
-memory, builds command buffers for reconstruction + filtering, submits to the GPU,
-and waits for completion.
+This is NOT a GPU implementation. It's the thread lifecycle and data flow
+infrastructure that a real GPU implementation would plug into.
 
-Design the following:
+The GPU thread's purpose: free the CPU from reconstruction + filtering work
+so the CPU is available for game logic.
 
-1. Av1SymbolBuffer structure — the CPU→GPU data exchange format:
-   - Must contain all data the GPU needs to reconstruct a frame WITHOUT
-     re-reading the bitstream
-   - Organized for efficient GPU upload (prefer SoA over AoS for GPU cache)
-   - Include: partition info, prediction modes, reference indices, motion vectors,
-     quantized coefficients, transform types/sizes, filter parameters,
-     segmentation map, film grain parameters
+File: av1_gpu_thread.h / av1_gpu_thread.c
 
-2. GPU thread state machine:
-   IDLE → WAITING_FOR_SYMBOLS → UPLOADING → BUILDING_CMDBUF →
-   SUBMITTED → WAITING_FENCE → FRAME_READY → (back to IDLE)
+The GPU thread:
+  1. Receives a "GPU job" after CPU entropy decode completes
+  2. In the stub: just marks the job as complete after a simulated delay
+  3. In a real implementation: would build command buffers, submit to GPU,
+     wait on fence, then mark complete
 
-3. Double-buffering strategy:
-   - Two symbol buffers per pipeline slot (ping-pong)
-   - CPU fills buffer A while GPU processes buffer B
-   - Synchronization: per-buffer semaphore
+For the FILM GRAIN path (real design, not stub):
+  - The GPU thread dispatches a compute shader that:
+    a. Reads the un-grained reconstructed frame from DPB (GPU memory)
+    b. Synthesizes film grain per the AV1 spec
+    c. Optionally converts pixel format (e.g., planar YUV → NV12, 
+       10-bit → packed, etc.) based on a "dst texture descriptor"
+    d. Writes directly to the destination buffer provided by SET OUTPUT
+  - This means for GPU mode, SET OUTPUT provides a GPU-visible buffer
+    (or a descriptor for the target surface)
+  - The copy thread is NOT used in GPU mode — the grain shader IS the copy
 
-4. What the GPU command buffer contains (abstract, not API-specific):
-   - Pass 1: Inverse quantization + inverse transform (compute)
-   - Pass 2: Intra prediction (compute, depends on reconstructed neighbors)
-   - Pass 3: Inter prediction (compute + texture sample from ref frames)
-   - Pass 4: Combine prediction + residual → reconstructed samples
-   - Pass 5: Loop filter (compute)
-   - Pass 6: CDEF (compute)
-   - Pass 7: Loop restoration (compute)
-   - Pass 8: Film grain synthesis (compute)
+Structures:
+typedef struct Av1GpuJob {
+    uint32_t frame_id;
+    int      dpb_slot;
+    int      needs_film_grain;
+    // Film grain params (from frame header)
+    // Destination descriptor (from av1_set_output)
+    void    *dst_descriptor;     // opaque — GPU API specific
+    _Atomic int status;          // PENDING, PROCESSING, COMPLETE
+} Av1GpuJob;
 
-5. GPU memory layout:
-   - Reconstructed frame buffers (DPB equivalent on GPU side)
-   - Reference frames (persistent across frames)
-   - Symbol upload staging buffer
-   - Intermediate buffers (prediction, residual)
+typedef struct Av1GpuThread {
+    pthread_t thread;
+    pthread_mutex_t mutex;
+    pthread_cond_t  cond;
+    Av1GpuJob *jobs;
+    int capacity;
+    int head, tail, count;
+    int exit_flag;
+    void *gpu_device;            // opaque GPU device handle
+} Av1GpuThread;
 
-6. Fallback: If GPU is busy, frame can be decoded on CPU path instead
-   (graceful degradation). Design the decision point.
+GPU thread loop (STUB):
+  while (!exit) {
+    wait for job
+    dequeue job
+    // STUB: simulate GPU work
+    usleep(1000);  // pretend 1ms of GPU processing
+    set status = COMPLETE
+    signal completion
+  }
 
-This is a DESIGN DOCUMENT. No shader code. No API-specific calls.
-Focus on data layout, threading, and synchronization.
+IMPORTANT: Document clearly where a real implementation would:
+  - Upload symbol data (coefficients, modes, MVs)
+  - Build reconstruction command buffer
+  - Build filter command buffer
+  - Build film grain + format conversion + output shader
+  - Submit and wait on fence
+  Use comments like: // GPU_IMPL: build inverse transform compute dispatch here
+
+Write a test:
+  - Create GPU thread stub
+  - Enqueue 10 fake jobs
+  - Wait for each to complete
+  - Verify all complete in order
+  - Destroy cleanly
 ```
 
 ### Verification checklist for Prompt 8:
-- [ ] Symbol buffer contains ALL data needed — no bitstream re-reading
-- [ ] Double buffering prevents CPU→GPU stalls
-- [ ] GPU pipeline passes are in correct dependency order
-- [ ] Intra prediction dependency (needs reconstructed neighbors) is addressed
-- [ ] Reference frames in GPU memory are managed (not re-uploaded every frame)
-- [ ] Fallback to CPU path is clean (no GPU-specific state leaks)
+- [ ] Thread starts and stops cleanly
+- [ ] Jobs complete in FIFO order
+- [ ] Stub delay works (each job takes ~1ms)
+- [ ] Clean shutdown with in-flight jobs
+- [ ] Comments clearly mark all GPU_IMPL extension points
+- [ ] Film grain + format conversion + direct-to-dst path is documented
 
 ---
 
-## Prompt 9: Integration Test Plan
+## Prompt 9: End-to-End Integration Test
 
 ```
-Write a test plan and test harness design for the complete AV1 decoder API.
+Write a complete end-to-end test program for the AV1 decoder API.
 
-Test categories:
+This program:
+  1. Opens an .ivf file
+  2. Parses the IVF header to get width/height
+  3. Parses the first frame to extract the AV1 Sequence Header OBU
+     (to get bit_depth, chroma subsampling, etc.)
+  4. Calls av1_query_memory() with stream info
+  5. Allocates the memory block
+  6. Calls av1_create_decoder()
+  7. Decode loop:
+     - Read next AU from IVF (frame = all bytes for one IVF frame entry)
+     - Call av1_decode()
+     - If QUEUE_FULL: drain via sync → set_output → receive_output, retry
+     - If frame_ready: sync → set_output → receive_output → write to .y4m
+  8. av1_flush()
+  9. Drain remaining: sync → set_output → receive_output until END_OF_STREAM
+  10. av1_destroy_decoder()
+  11. Free memory
 
-1. Unit tests (per component):
-   - Pool allocator: alloc/free patterns, exhaustion, alignment
-   - Job queue: SPSC/MPSC correctness, full/empty, wraparound
-   - Memory calc: known resolutions produce expected ranges
-   - Copy thread: correctness, multiple frames, timeout
+IVF format (for the parser):
+  - 32 bytes header: signature "DKIF", version, header_size, fourcc,
+    width, height, timebase_num, timebase_den, num_frames, unused
+  - Per frame: 4 bytes size (LE) + 8 bytes timestamp (LE) + size bytes data
 
-2. API integration tests:
-   - Happy path: query → create → decode 100 frames → sync/output each → flush → destroy
-   - Queue full: decode queue_depth+1 frames without sync → get QUEUE_FULL → drain → continue
-   - Show existing frame: verify it completes without worker dispatch
-   - Flush mid-stream: flush after 10 frames, drain remaining
-   - Double destroy: verify second destroy is harmless (or returns error)
-   - Bad parameters: NULL pointers, zero queue_depth, insufficient memory
+Y4M output format:
+  - Header: "YUV4MPEG2 W{w} H{h} F{fps_num}:{fps_den} Ip C{colorspace}\n"
+  - Per frame: "FRAME\n" + Y plane + U plane + V plane
 
-3. Stress tests:
-   - Rapid decode/sync alternation (single frame at a time)
-   - Maximum queue depth with 4K 10-bit (memory pressure)
-   - All workers busy + queue full + flush simultaneously
+Conformance verification:
+  - Decode a known test vector with aomdec to produce reference.y4m
+  - Decode same vector with our API to produce test.y4m
+  - Binary diff: they must be identical
 
-4. Conformance:
-   - Decode AV1 test vectors through new API
-   - Compare output against reference decoder output (PSNR = infinity)
-   - Test: AV1 test suite (aom_test) adapted to use new API
+Test vectors to use:
+  - AV1 test suite vectors from aomedia.org (or any .ivf file)
 
-Write the test harness as a C program skeleton:
-- Read .ivf or .obu file
-- Parse sequence header for av1_query_memory
-- Create decoder
-- Loop: read AU → av1_decode → check sync → set_output → receive_output → write .y4m
-- Flush and cleanup
-- Compare output against known-good .y4m
+Also test error paths:
+  - Truncated bitstream (pass fewer bytes than IVF says)
+  - Zero-length AU
+  - QUEUE_FULL recovery
 ```
 
 ### Verification checklist for Prompt 9:
-- [ ] Happy path test exercises all 7 API functions
-- [ ] Edge cases (queue full, flush, timeout) are covered
-- [ ] Conformance test compares against known-good output
-- [ ] Test harness can read standard .ivf files
-- [ ] Stress tests run clean under ThreadSanitizer and AddressSanitizer
+- [ ] Successfully decodes at least one AV1 .ivf test vector
+- [ ] Output matches aomdec bit-exactly
+- [ ] QUEUE_FULL handling works (drain + retry succeeds)
+- [ ] Flush drains all remaining frames
+- [ ] No memory leaks (AddressSanitizer clean)
+- [ ] No thread leaks (all threads joined at exit)
+- [ ] IVF parser handles edge cases (empty file, truncated frame)
 
 ---
 
 ## Prompt Execution Order
 
 ```
-Prompt 1 (allocator) ──→ Prompt 2 (queues) ──→ Prompt 3 (memory calc)
-                                                       │
-Prompt 4 (copy thread) ←──────────────────────────────┘
+Prompt 1 (malloc override) → Prompt 2 (job queue) → Prompt 3 (query + create)
+                                                           │
+Prompt 4 (copy thread) ←──────────────────────────────────┘
        │
-       ├──→ Prompt 5 (OBU split design)
+       ├──→ Prompt 5 (av1_decode)
        │         │
        │         ▼
-       ├──→ Prompt 6 (create_decoder)
+       ├──→ Prompt 6 (sync + set_output + receive_output)
        │         │
        │         ▼
-       └──→ Prompt 7 (sync/flush/destroy)
+       └──→ Prompt 7 (flush + destroy)
                  │
                  ▼
-            Prompt 8 (GPU thread design)
+            Prompt 8 (GPU thread stub)
                  │
                  ▼
-            Prompt 9 (integration tests)
+            Prompt 9 (end-to-end integration test)
 ```
 
-Prompts 1–4 produce compilable, testable code.
-Prompts 5–7 produce design pseudocode requiring AOM source modification.
-Prompt 8 produces GPU design documentation.
-Prompt 9 produces a test plan and harness skeleton.
+All prompts produce compilable, testable code.
+Prompt 8 is a stub with documented extension points for real GPU work.
+Prompt 9 is the conformance gate — bit-exact match with aomdec.

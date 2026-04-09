@@ -21,15 +21,43 @@ DESIGN DECISIONS without revealing any proprietary implementation details.
 
 ## Scrubbing rules
 
+### PROPRIETARY PREFIX / TERM BLOCKLIST (edit this list before running)
+
+The following prefixes and terms are PROPRIETARY and must be scrubbed.
+Add or remove entries as needed for your codebase:
+
+```
+# --- EDIT THESE LISTS BEFORE RUNNING ---
+
+PROPRIETARY_PREFIXES:
+  - lux_          # e.g., lux_decode, lux_create_decoder, LuxDecContext
+  - sce_          # e.g., sce_malloc, SceThread, sce_kernel_*
+  - <ADD_MORE>    # add any other proprietary prefixes here
+
+PROPRIETARY_TERMS:
+  - <PROJECT_CODENAME>    # e.g., "ProjectOrion" → remove entirely
+  - <CONSOLE_NAME>        # e.g., specific hardware platform name
+  - <SDK_NAME>            # e.g., platform SDK or devkit name
+  - <TEAM_NAME>           # internal team names
+  - <ADD_MORE>            # add any other specific terms to scrub
+
+# --- END EDIT ---
+```
+
+Any identifier matching these prefixes (case-insensitive) MUST be replaced.
+Scan the entire report for these prefixes using regex: `(?i)(lux_|sce_)\w+`
+and replace every match with a generic description.
+
 ### MUST REMOVE (replace with generic/libvpx equivalents):
+- All identifiers matching PROPRIETARY_PREFIXES above → describe by purpose
+  Example: "lux_decode_submit()" → "the non-blocking decode submission function"
+  Example: "SceKernelCreateThread" → "the platform thread creation API"
+  Example: "LuxDecContext" → "the decoder context (analogous to VP9Decoder)"
 - All proprietary function names → describe by purpose using libvpx terms
-  Example: "hw_dec_submit_au()" → "the non-blocking decode submission function"
 - All proprietary struct/type names → describe using libvpx struct equivalents
-  Example: "HwDecContext" → "the decoder context (analogous to VP9Decoder / vpx_codec_alg_priv_t)"
 - All proprietary file names/paths → "the custom [purpose] module"
-  Example: "hw_dec_api.c" → "the custom API layer module"
 - All proprietary enum values/error codes → describe generically
-  Example: "HW_DEC_QUEUE_FULL" → "a queue-full status code"
+  Example: "LUX_DEC_QUEUE_FULL" → "a queue-full status code"
 - Console/platform-specific names (SDK names, hardware names, OS API names)
   → "the target platform" or "the platform threading API"
 - Team names, project names, codenames → remove entirely
@@ -75,16 +103,27 @@ Maintain the same section structure as the input report. For each section:
    we want to reuse these lessons for the AV1 port)
 
 ### FINAL CHECKS:
-Before outputting the scrubbed report, verify:
-- [ ] No proprietary function/struct/type names remain
-- [ ] No console/platform SDK names remain
-- [ ] No internal project names or ticket numbers remain
-- [ ] No file paths from the proprietary codebase remain
-- [ ] All code snippets use libvpx names or generic pseudocode only
-- [ ] The report still makes technical sense and is useful for the AV1 port
-- [ ] The "Applicability to AV1" subsections reference AOM equivalents:
-      VP9Decoder → AV1Decoder, VP9_COMMON → AV1_COMMON,
-      vp9_decode_frame → aom_decode_frame_from_obus, etc.
+Before outputting the scrubbed report, perform these verification steps:
+
+1. **Regex scan**: Search the entire output for each PROPRIETARY_PREFIX:
+   - `(?i)lux_\w+` → must return ZERO matches
+   - `(?i)sce_\w+` → must return ZERO matches
+   - (repeat for any additional prefixes in the blocklist)
+
+2. **Term scan**: Search for each entry in PROPRIETARY_TERMS → must return ZERO matches
+
+3. **Manual checklist**:
+   - [ ] No proprietary function/struct/type names remain
+   - [ ] No console/platform SDK names remain
+   - [ ] No internal project names or ticket numbers remain
+   - [ ] No file paths from the proprietary codebase remain
+   - [ ] All code snippets use libvpx names or generic pseudocode only
+   - [ ] The report still makes technical sense and is useful for the AV1 port
+   - [ ] The "Applicability to AV1" subsections reference AOM equivalents:
+         VP9Decoder → AV1Decoder, VP9_COMMON → AV1_COMMON,
+         vp9_decode_frame → aom_decode_frame_from_obus, etc.
+
+4. If ANY proprietary term is found, fix it and re-run the checks.
 
 ## Input report
 
