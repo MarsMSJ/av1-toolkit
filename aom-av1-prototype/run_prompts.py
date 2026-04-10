@@ -39,16 +39,27 @@ MODEL_NAME = "MiniMax-M2.5"  # vLLM will serve whatever model is loaded;
 
 MAX_TOKENS = 16384  # M2.5 supports long output; bump if truncated
 TEMPERATURE = 0.2   # low temp for code generation
-REQUEST_TIMEOUT = 600  # 10 min per prompt — some are big
+REQUEST_TIMEOUT = 1800  # 30 min per prompt — FP8-INT4 quant is slow for long output
 
 # ---------------------------------------------------------------------------
 # System prompt (shared context for all prompts)
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = """\
-You are a senior C systems programmer implementing components for an AV1 \
-video decoder. You write production-quality C11 code with thorough comments, \
-proper error handling, and tests.
+You are a senior C systems programmer. You are NOT an agent — you have NO \
+tools, NO file access, NO ability to read files or run commands. You can \
+ONLY output text. Do NOT output any XML tool calls or attempt to invoke any tools.
+
+Your task: generate complete, compilable C11 source files. Output the FULL \
+file contents directly in your response using markdown fenced code blocks. \
+Each file must be preceded by a heading with its filename, like:
+
+### av1_example.h
+```c
+// full file contents here
+```
+
+You are implementing components for an AV1 video decoder.
 
 Key project constraints:
 - Pipeline is SERIAL — one frame decoded at a time, queue depth is for \
@@ -60,13 +71,11 @@ Key project constraints:
 - GPU thread is a stub for CPU offload; film grain will be a GPU compute \
   shader writing directly to the destination buffer with format conversion.
 - Target: AOM reference decoder (libaom). This is for accuracy, not speed.
-- This repo (av1-toolkit) is at: ~/dev-tools/av1-toolkit
-- AOM source tree is at: ~/dev-tools/av1-toolkit/aom (headers in aom/, av1/, aom_dsp/, aom_mem/)
-- New decoder API files go in: ~/dev-tools/av1-toolkit/aom-av1-prototype/src/
+- AOM source tree has headers in aom/, av1/, aom_dsp/, aom_mem/.
 - Use pthreads for threading. C11 atomics where appropriate.
 - Always include a compilable test with main().
 - Output COMPLETE files — headers and implementation — ready to save and compile.
-- Include compilation instructions referencing the AOM source/build at ~/dev-tools/aom.
+- Do NOT try to read files. Do NOT output tool calls. Just write the code.
 """
 
 # ---------------------------------------------------------------------------
@@ -888,8 +897,14 @@ def main():
             else:
                 log(f"  WARNING: Dependency Prompt {dep_id} not found in saved outputs!")
 
-        # Add the actual prompt
-        messages.append({"role": "user", "content": prompt_info["prompt"]})
+        # Add the actual prompt with reinforcement to not use tools
+        prompt_text = prompt_info["prompt"] + "\n\n" + (
+            "IMPORTANT: Output the complete file contents directly in your response. "
+            "Use markdown fenced code blocks with a ### filename heading before each file. "
+            "Do NOT attempt to read files, call tools, or output XML. "
+            "Generate all code from scratch based on the requirements above."
+        )
+        messages.append({"role": "user", "content": prompt_text})
 
         if args.dry_run:
             log(f"  [DRY RUN] Would send {len(messages)} messages, "
