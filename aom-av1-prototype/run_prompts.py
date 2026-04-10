@@ -784,8 +784,8 @@ def extract_and_save_files(text: str, prompt_dir: Path):
 
 def main():
     parser = argparse.ArgumentParser(description="Run AV1 decoder prompts on local vLLM")
-    parser.add_argument("--base-url", default="http://localhost:8000/v1",
-                        help="vLLM OpenAI-compatible API base URL (default: http://localhost:8000/v1)")
+    parser.add_argument("--base-url", default="http://192.168.1.120:8000/v1",
+                        help="vLLM OpenAI-compatible API base URL (default: http://192.168.1.120:8000/v1)")
     parser.add_argument("--model", default=MODEL_NAME,
                         help=f"Model name for the API (default: {MODEL_NAME})")
     parser.add_argument("--max-tokens", type=int, default=MAX_TOKENS,
@@ -871,10 +871,10 @@ def main():
             if dep_id in saved_outputs:
                 dep_name = next(p["name"] for p in PROMPTS if p["id"] == dep_id)
                 dep_title = next(p["title"] for p in PROMPTS if p["id"] == dep_id)
-                # Truncate very long outputs to avoid blowing context
+                # 196K context — generous but not unlimited. Truncate only if huge.
                 dep_text = saved_outputs[dep_id]
-                if len(dep_text) > 30000:
-                    dep_text = dep_text[:30000] + "\n\n... [TRUNCATED — see full output in saved file] ..."
+                if len(dep_text) > 80000:
+                    dep_text = dep_text[:80000] + "\n\n... [TRUNCATED — see full output in saved file] ..."
                 messages.append({
                     "role": "user",
                     "content": f"Here is the output from Prompt {dep_id} ({dep_title}) "
