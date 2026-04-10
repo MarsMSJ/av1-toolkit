@@ -1,0 +1,26 @@
+{
+  "prompt_id": 7,
+  "prompt_name": "flush_destroy",
+  "timestamp": "2026-04-10T00:30:06.814546",
+  "elapsed_seconds": 63.047269344329834,
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 1064,
+    "total_tokens": 1423,
+    "completion_tokens": 359,
+    "prompt_tokens_details": null
+  },
+  "model": "MiniMax-M2.5",
+  "temperature": 0.2,
+  "max_tokens": 16384,
+  "extracted_files": [],
+  "checklist": [
+    "Flush + drain cycle works (END_OF_STREAM returned correctly)",
+    "Destroy after flush is clean",
+    "Destroy without flush doesn't hang",
+    "Destroy with no decodes doesn't crash",
+    "No thread leaks (all threads joined)",
+    "AddressSanitizer clean (no leaks)"
+  ],
+  "response_hash": "6348eb50371e0328"
+}

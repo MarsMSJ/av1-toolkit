@@ -1,0 +1,26 @@
+{
+  "prompt_id": 5,
+  "prompt_name": "av1_decode",
+  "timestamp": "2026-04-10T00:28:16.165208",
+  "elapsed_seconds": 128.98908042907715,
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 1015,
+    "total_tokens": 1614,
+    "completion_tokens": 599,
+    "prompt_tokens_details": null
+  },
+  "model": "MiniMax-M2.5",
+  "temperature": 0.2,
+  "max_tokens": 16384,
+  "extracted_files": [],
+  "checklist": [
+    "Decodes AV1 bitstream without crashing",
+    "Frame ready flag set correctly for show_frame / show_existing",
+    "Non-display frames (reference only) produce frame_ready=0",
+    "QUEUE_FULL returned when ready queue is full",
+    "Frame IDs are monotonically increasing",
+    "State transitions correct (CREATED -> DECODING)"
+  ],
+  "response_hash": "a993e32993cacdf1"
+}

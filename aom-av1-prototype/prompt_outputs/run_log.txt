@@ -1,0 +1,157 @@
+[2026-04-09 23:46:06] === AV1 Decoder Prompt Runner ===
+[2026-04-09 23:46:06] Base URL: http://192.168.1.120:8000/v1
+[2026-04-09 23:46:06] Model: MiniMax-M2.5
+[2026-04-09 23:46:06] Max tokens: 16384
+[2026-04-09 23:46:06] Temperature: 0.2
+[2026-04-09 23:46:06] Output dir: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/prompt_outputs
+[2026-04-09 23:46:06] Running prompts: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+[2026-04-09 23:46:06] Previously saved outputs available: []
+[2026-04-09 23:46:06] 
+[2026-04-09 23:46:06] Connected to vLLM. Available models: [
+  {
+    "id": "MiniMax-M2.5",
+    "object": "model",
+    "created": 1775803566,
+    "owned_by": "vllm",
+    "root": "/root/.cache/huggingface/MiniMax-M2.5-FP8-INT4-AWQ",
+    "parent": null,
+    "max_model_len": 196608,
+    "permission": [
+      {
+        "id": "modelperm-a64714c9d09c5cda",
+        "object": "model_permission",
+        "created": 1775803566,
+        "allow_create_engine": false,
+        "allow_sampling": true,
+        "allow_logprobs": true,
+        "allow_search_indices": false,
+        "allow_view": true,
+        "allow_fine_tuning": false,
+        "organization": "*",
+        "group": null,
+        "is_blocking": false
+      }
+    ]
+  }
+]
+[2026-04-09 23:46:06] 
+[2026-04-09 23:46:06] ============================================================
+[2026-04-09 23:46:06] PROMPT 1: malloc/memalign/free Override Layer
+[2026-04-09 23:46:06] ============================================================
+[2026-04-09 23:46:06]   Sending to model (1 messages)...
+[2026-04-09 23:56:06]   ✗ TIMEOUT after 600.1s (limit: 600s)
+[2026-04-09 23:56:06]   Skipping to next prompt. Re-run with: --only 1 --timeout 1200
+[2026-04-09 23:56:06] ============================================================
+[2026-04-09 23:56:06] PROMPT 2: Job Queue (Simple Mutex-Based)
+[2026-04-09 23:56:06] ============================================================
+[2026-04-09 23:56:06]   Sending to model (1 messages)...
+[2026-04-10 00:06:06]   ✗ TIMEOUT after 600.1s (limit: 600s)
+[2026-04-10 00:06:06]   Skipping to next prompt. Re-run with: --only 2 --timeout 1200
+[2026-04-10 00:06:06] ============================================================
+[2026-04-10 00:06:06] PROMPT 3: av1_query_memory and av1_create_decoder
+[2026-04-10 00:06:06] ============================================================
+[2026-04-10 00:06:06]   WARNING: Dependency Prompt 1 not found in saved outputs!
+[2026-04-10 00:06:06]   WARNING: Dependency Prompt 2 not found in saved outputs!
+[2026-04-10 00:06:06]   Sending to model (1 messages)...
+[2026-04-10 00:16:07]   ✗ TIMEOUT after 600.1s (limit: 600s)
+[2026-04-10 00:16:07]   Skipping to next prompt. Re-run with: --only 3 --timeout 1200
+[2026-04-10 00:16:07] ============================================================
+[2026-04-10 00:16:07] PROMPT 4: Copy Thread
+[2026-04-10 00:16:07] ============================================================
+[2026-04-10 00:16:07]   WARNING: Dependency Prompt 2 not found in saved outputs!
+[2026-04-10 00:16:07]   Sending to model (1 messages)...
+[2026-04-10 00:26:07]   ✗ TIMEOUT after 600.1s (limit: 600s)
+[2026-04-10 00:26:07]   Skipping to next prompt. Re-run with: --only 4 --timeout 1200
+[2026-04-10 00:26:07] ============================================================
+[2026-04-10 00:26:07] PROMPT 5: av1_decode — Serial Decode with AU = TD-to-TD
+[2026-04-10 00:26:07] ============================================================
+[2026-04-10 00:26:07]   WARNING: Dependency Prompt 1 not found in saved outputs!
+[2026-04-10 00:26:07]   WARNING: Dependency Prompt 2 not found in saved outputs!
+[2026-04-10 00:26:07]   WARNING: Dependency Prompt 3 not found in saved outputs!
+[2026-04-10 00:26:07]   Sending to model (1 messages)...
+[2026-04-10 00:28:16]   Received response in 129.0s
+[2026-04-10 00:28:16]   Finish reason: stop
+[2026-04-10 00:28:16]   Tokens — prompt: 1015, completion: 599, total: 1614
+[2026-04-10 00:28:16]   Saved raw response + extracted files: []
+[2026-04-10 00:28:16]   Verification checklist for Prompt 5:
+[2026-04-10 00:28:16]     [ ] Decodes AV1 bitstream without crashing
+[2026-04-10 00:28:16]     [ ] Frame ready flag set correctly for show_frame / show_existing
+[2026-04-10 00:28:16]     [ ] Non-display frames (reference only) produce frame_ready=0
+[2026-04-10 00:28:16]     [ ] QUEUE_FULL returned when ready queue is full
+[2026-04-10 00:28:16]     [ ] Frame IDs are monotonically increasing
+[2026-04-10 00:28:16]     [ ] State transitions correct (CREATED -> DECODING)
+[2026-04-10 00:28:16] 
+[2026-04-10 00:28:16] ============================================================
+[2026-04-10 00:28:16] PROMPT 6: av1_sync, av1_set_output, av1_receive_output
+[2026-04-10 00:28:16] ============================================================
+[2026-04-10 00:28:16]   WARNING: Dependency Prompt 2 not found in saved outputs!
+[2026-04-10 00:28:16]   WARNING: Dependency Prompt 3 not found in saved outputs!
+[2026-04-10 00:28:16]   WARNING: Dependency Prompt 4 not found in saved outputs!
+[2026-04-10 00:28:16]   Injecting context: Prompt 5 (av1_decode) — 416 chars
+[2026-04-10 00:28:16]   Sending to model (3 messages)...
+[2026-04-10 00:29:03]   Received response in 47.6s
+[2026-04-10 00:29:03]   Finish reason: stop
+[2026-04-10 00:29:03]   Tokens — prompt: 976, completion: 252, total: 1228
+[2026-04-10 00:29:03]   Saved raw response + extracted files: []
+[2026-04-10 00:29:03]   Verification checklist for Prompt 6:
+[2026-04-10 00:29:03]     [ ] Full decode -> sync -> set_output -> receive_output pipeline works
+[2026-04-10 00:29:03]     [ ] Output is bit-exact with aomdec reference output
+[2026-04-10 00:29:03]     [ ] Multiple frames decoded and output correctly
+[2026-04-10 00:29:03]     [ ] DPB slots are freed after receive_output (no leak / exhaustion)
+[2026-04-10 00:29:03]     [ ] Timeout works on av1_sync and av1_receive_output
+[2026-04-10 00:29:03] 
+[2026-04-10 00:29:03] ============================================================
+[2026-04-10 00:29:03] PROMPT 7: av1_flush and av1_destroy_decoder
+[2026-04-10 00:29:03] ============================================================
+[2026-04-10 00:29:03]   WARNING: Dependency Prompt 3 not found in saved outputs!
+[2026-04-10 00:29:03]   WARNING: Dependency Prompt 4 not found in saved outputs!
+[2026-04-10 00:29:03]   Injecting context: Prompt 5 (av1_decode) — 416 chars
+[2026-04-10 00:29:03]   Injecting context: Prompt 6 (sync_output) — 352 chars
+[2026-04-10 00:29:03]   Sending to model (5 messages)...
+[2026-04-10 00:30:06]   Received response in 63.0s
+[2026-04-10 00:30:06]   Finish reason: stop
+[2026-04-10 00:30:06]   Tokens — prompt: 1064, completion: 359, total: 1423
+[2026-04-10 00:30:06]   Saved raw response + extracted files: []
+[2026-04-10 00:30:06]   Verification checklist for Prompt 7:
+[2026-04-10 00:30:06]     [ ] Flush + drain cycle works (END_OF_STREAM returned correctly)
+[2026-04-10 00:30:06]     [ ] Destroy after flush is clean
+[2026-04-10 00:30:06]     [ ] Destroy without flush doesn't hang
+[2026-04-10 00:30:06]     [ ] Destroy with no decodes doesn't crash
+[2026-04-10 00:30:06]     [ ] No thread leaks (all threads joined)
+[2026-04-10 00:30:06]     [ ] AddressSanitizer clean (no leaks)
+[2026-04-10 00:30:06] 
+[2026-04-10 00:30:06] ============================================================
+[2026-04-10 00:30:06] PROMPT 8: GPU Thread Stub
+[2026-04-10 00:30:06] ============================================================
+[2026-04-10 00:30:06]   WARNING: Dependency Prompt 2 not found in saved outputs!
+[2026-04-10 00:30:06]   WARNING: Dependency Prompt 4 not found in saved outputs!
+[2026-04-10 00:30:06]   Sending to model (1 messages)...
+[2026-04-10 00:40:06]   ✗ TIMEOUT after 600.1s (limit: 600s)
+[2026-04-10 00:40:06]   Skipping to next prompt. Re-run with: --only 8 --timeout 1200
+[2026-04-10 00:40:06] ============================================================
+[2026-04-10 00:40:06] PROMPT 9: End-to-End Integration Test
+[2026-04-10 00:40:06] ============================================================
+[2026-04-10 00:40:06]   WARNING: Dependency Prompt 1 not found in saved outputs!
+[2026-04-10 00:40:06]   WARNING: Dependency Prompt 2 not found in saved outputs!
+[2026-04-10 00:40:06]   WARNING: Dependency Prompt 3 not found in saved outputs!
+[2026-04-10 00:40:06]   WARNING: Dependency Prompt 4 not found in saved outputs!
+[2026-04-10 00:40:06]   Injecting context: Prompt 5 (av1_decode) — 416 chars
+[2026-04-10 00:40:06]   Injecting context: Prompt 6 (sync_output) — 352 chars
+[2026-04-10 00:40:06]   Injecting context: Prompt 7 (flush_destroy) — 373 chars
+[2026-04-10 00:40:06]   Sending to model (7 messages)...
+[2026-04-10 00:41:14]   Received response in 67.8s
+[2026-04-10 00:41:14]   Finish reason: stop
+[2026-04-10 00:41:14]   Tokens — prompt: 1190, completion: 359, total: 1549
+[2026-04-10 00:41:14]   Saved raw response + extracted files: []
+[2026-04-10 00:41:14]   Verification checklist for Prompt 9:
+[2026-04-10 00:41:14]     [ ] Successfully decodes at least one AV1 .ivf test vector
+[2026-04-10 00:41:14]     [ ] Output matches aomdec bit-exactly
+[2026-04-10 00:41:14]     [ ] QUEUE_FULL handling works (drain + retry succeeds)
+[2026-04-10 00:41:14]     [ ] Flush drains all remaining frames
+[2026-04-10 00:41:14]     [ ] No memory leaks (AddressSanitizer clean)
+[2026-04-10 00:41:14]     [ ] No thread leaks (all threads joined at exit)
+[2026-04-10 00:41:14]     [ ] IVF parser handles edge cases (empty file, truncated frame)
+[2026-04-10 00:41:14] 
+[2026-04-10 00:41:14] === Run complete ===
+[2026-04-10 00:41:14] Outputs saved to: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/prompt_outputs
+[2026-04-10 00:41:14] Log saved to: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/prompt_outputs/run_log.txt

@@ -1,0 +1,25 @@
+{
+  "prompt_id": 6,
+  "prompt_name": "sync_output",
+  "timestamp": "2026-04-10T00:29:03.763844",
+  "elapsed_seconds": 47.59429121017456,
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 976,
+    "total_tokens": 1228,
+    "completion_tokens": 252,
+    "prompt_tokens_details": null
+  },
+  "model": "MiniMax-M2.5",
+  "temperature": 0.2,
+  "max_tokens": 16384,
+  "extracted_files": [],
+  "checklist": [
+    "Full decode -> sync -> set_output -> receive_output pipeline works",
+    "Output is bit-exact with aomdec reference output",
+    "Multiple frames decoded and output correctly",
+    "DPB slots are freed after receive_output (no leak / exhaustion)",
+    "Timeout works on av1_sync and av1_receive_output"
+  ],
+  "response_hash": "023c606d5adf4fa0"
+}
