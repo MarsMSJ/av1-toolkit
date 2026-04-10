@@ -42,6 +42,105 @@ TEMPERATURE = 0.2   # low temp for code generation
 REQUEST_TIMEOUT = 1800  # 30 min per prompt — FP8-INT4 quant is slow for long output
 
 # ---------------------------------------------------------------------------
+# AOM source files to inject as context (~70-90K tokens total, fits in 197K)
+# Paths are relative to the repo root (av1-toolkit/)
+# ---------------------------------------------------------------------------
+
+# Which AOM source files each prompt needs as reference context.
+# "all" = shared base set; per-prompt overrides add more.
+AOM_BASE_DIR_CANDIDATES = [
+    Path.home() / "dev-tools" / "av1-toolkit" / "aom",   # spark cluster
+    SCRIPT_DIR.parent / "aom",                             # sibling to aom-av1-prototype/
+]
+
+AOM_CONTEXT_FILES = {
+    # Core files every prompt should see
+    "core": [
+        "aom_mem/aom_mem.h",
+        "aom_mem/aom_mem.c",
+        "aom/aom_codec.h",
+        "aom/aom_decoder.h",
+    ],
+    # Decoder internals — for prompts that need struct definitions
+    "decoder_structs": [
+        "av1/decoder/decoder.h",
+        "av1/common/av1_common_int.h",
+    ],
+    # Decoder implementation — for prompts that modify the decode path
+    "decoder_impl": [
+        "aom/src/aom_decoder.c",
+        "av1/decoder/decoder.c",
+        "av1/av1_dx_iface.c",
+    ],
+    # OBU / decode pipeline — for the decode split
+    "decode_pipeline": [
+        "av1/decoder/obu.c",
+    ],
+    # Threading
+    "threading": [
+        "av1/common/thread_common.h",
+    ],
+}
+
+# Map prompt_id -> which context groups to include
+PROMPT_CONTEXT_MAP = {
+    1: ["core"],                                                    # mem override
+    2: ["core"],                                                    # job queue
+    3: ["core", "decoder_structs", "decoder_impl"],                 # query + create
+    4: ["core", "decoder_structs"],                                 # copy thread
+    5: ["core", "decoder_structs", "decoder_impl", "decode_pipeline"],  # av1_decode
+    6: ["core", "decoder_structs"],                                 # sync/output
+    7: ["core", "decoder_structs", "decoder_impl"],                 # flush/destroy
+    8: ["core", "decoder_structs", "threading"],                    # GPU thread stub
+    9: ["core", "decoder_structs", "decoder_impl", "decode_pipeline"],  # e2e test
+}
+
+
+def find_aom_base() -> Path:
+    """Find the AOM source directory."""
+    for candidate in AOM_BASE_DIR_CANDIDATES:
+        if candidate.is_dir() and (candidate / "aom" / "aom_decoder.h").exists():
+            return candidate
+    return None
+
+
+def load_aom_context(prompt_id: int, aom_base: Path) -> str:
+    """Load AOM source files relevant to this prompt and format as context."""
+    if aom_base is None:
+        return ""
+
+    groups = PROMPT_CONTEXT_MAP.get(prompt_id, ["core"])
+    files_to_load = []
+    seen = set()
+    for group in groups:
+        for f in AOM_CONTEXT_FILES.get(group, []):
+            if f not in seen:
+                files_to_load.append(f)
+                seen.add(f)
+
+    sections = []
+    total_chars = 0
+    for rel_path in files_to_load:
+        full_path = aom_base / rel_path
+        if not full_path.exists():
+            sections.append(f"// FILE NOT FOUND: {rel_path}")
+            continue
+        content = full_path.read_text(encoding="utf-8", errors="replace")
+        total_chars += len(content)
+        sections.append(f"### {rel_path}\n```c\n{content}\n```")
+
+    if not sections:
+        return ""
+
+    header = (
+        f"## AOM Reference Decoder Source Code\n\n"
+        f"Below are the relevant AOM source files ({len(files_to_load)} files, "
+        f"~{total_chars // 1000}K chars). Use these as reference for struct definitions, "
+        f"function signatures, and the existing implementation you are wrapping/modifying.\n\n"
+    )
+    return header + "\n\n".join(sections)
+
+# ---------------------------------------------------------------------------
 # System prompt (shared context for all prompts)
 # ---------------------------------------------------------------------------
 
@@ -794,7 +893,8 @@ def extract_and_save_files(text: str, prompt_dir: Path):
 def main():
     parser = argparse.ArgumentParser(description="Run AV1 decoder prompts on local vLLM")
     parser.add_argument("--base-url", default="http://192.168.1.120:8000/v1",
-                        help="vLLM OpenAI-compatible API base URL (default: http://192.168.1.120:8000/v1)")
+                        help="OpenAI-compatible API base URL. Works with vLLM and llama.cpp server. "
+                             "(default: http://192.168.1.120:8000/v1)")
     parser.add_argument("--model", default=MODEL_NAME,
                         help=f"Model name for the API (default: {MODEL_NAME})")
     parser.add_argument("--max-tokens", type=int, default=MAX_TOKENS,
@@ -811,6 +911,8 @@ def main():
                         help="Print prompts without sending to the model")
     parser.add_argument("--output-dir", type=str, default=str(OUTPUT_DIR),
                         help=f"Output directory (default: {OUTPUT_DIR})")
+    parser.add_argument("--aom-dir", type=str, default=None,
+                        help="Path to AOM source tree (auto-detected if not set)")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -841,12 +943,18 @@ def main():
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(line + "\n")
 
+    # Find AOM source directory
+    aom_base = find_aom_base()
+    if args.aom_dir:
+        aom_base = Path(args.aom_dir)
+
     log(f"=== AV1 Decoder Prompt Runner ===")
     log(f"Base URL: {args.base_url}")
     log(f"Model: {args.model}")
     log(f"Max tokens: {args.max_tokens}")
     log(f"Temperature: {args.temperature}")
     log(f"Output dir: {output_dir}")
+    log(f"AOM source dir: {aom_base or 'NOT FOUND — prompts will lack source context'}")
     log(f"Running prompts: {[p['id'] for p in to_run]}")
     log(f"Previously saved outputs available: {list(saved_outputs.keys())}")
     log("")
@@ -874,13 +982,29 @@ def main():
         log(f"PROMPT {pid}: {title}")
         log(f"{'='*60}")
 
-        # Build messages: include prior outputs as context
+        # Build messages: AOM source context + prior outputs + prompt
         messages = []
+
+        # 1. Inject AOM source files as first context message
+        aom_context = load_aom_context(pid, aom_base)
+        if aom_context:
+            messages.append({
+                "role": "user",
+                "content": aom_context
+            })
+            messages.append({
+                "role": "assistant",
+                "content": "I've reviewed the AOM reference decoder source files. I can see the "
+                           "struct definitions, memory allocation patterns, decoder API, and "
+                           "internal implementation. I'll use these as reference."
+            })
+            log(f"  Injected AOM source context: {len(aom_context)} chars")
+
+        # 2. Inject prior prompt outputs as context
         for dep_id in prompt_info["depends_on"]:
             if dep_id in saved_outputs:
                 dep_name = next(p["name"] for p in PROMPTS if p["id"] == dep_id)
                 dep_title = next(p["title"] for p in PROMPTS if p["id"] == dep_id)
-                # 196K context — generous but not unlimited. Truncate only if huge.
                 dep_text = saved_outputs[dep_id]
                 if len(dep_text) > 80000:
                     dep_text = dep_text[:80000] + "\n\n... [TRUNCATED — see full output in saved file] ..."
@@ -893,23 +1017,27 @@ def main():
                     "role": "assistant",
                     "content": f"Understood. I have the implementation from Prompt {dep_id} ({dep_title}) as context."
                 })
-                log(f"  Injecting context: Prompt {dep_id} ({dep_name}) — {len(dep_text)} chars")
+                log(f"  Injecting prior output: Prompt {dep_id} ({dep_name}) — {len(dep_text)} chars")
             else:
                 log(f"  WARNING: Dependency Prompt {dep_id} not found in saved outputs!")
 
-        # Add the actual prompt with reinforcement to not use tools
+        # 3. Add the actual prompt with reinforcement
         prompt_text = prompt_info["prompt"] + "\n\n" + (
             "IMPORTANT: Output the complete file contents directly in your response. "
             "Use markdown fenced code blocks with a ### filename heading before each file. "
             "Do NOT attempt to read files, call tools, or output XML. "
-            "Generate all code from scratch based on the requirements above."
+            "Generate all code from scratch based on the requirements and AOM source above."
         )
         messages.append({"role": "user", "content": prompt_text})
 
         if args.dry_run:
-            log(f"  [DRY RUN] Would send {len(messages)} messages, "
-                f"prompt length: {len(prompt_info['prompt'])} chars")
-            log(f"  First 200 chars of prompt: {prompt_info['prompt'][:200]}...")
+            total_chars = sum(len(m["content"]) for m in messages)
+            est_tokens = total_chars // 3  # rough estimate: ~3 chars/token
+            log(f"  [DRY RUN] Would send {len(messages)} messages")
+            log(f"  Total input chars: {total_chars:,} (~{est_tokens:,} tokens estimated)")
+            log(f"  Prompt text: {len(prompt_info['prompt'])} chars")
+            log(f"  AOM context: {len(aom_context)} chars")
+            log(f"  Budget remaining: ~{197000 - est_tokens - args.max_tokens:,} tokens")
             log("")
             continue
 
