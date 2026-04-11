@@ -39,7 +39,8 @@ MODEL_NAME = "MiniMax-M2.5"  # vLLM will serve whatever model is loaded;
 
 MAX_TOKENS = 16384  # M2.5 supports long output; bump if truncated
 TEMPERATURE = 0.2   # low temp for code generation
-REQUEST_TIMEOUT = 1800  # 30 min per prompt — FP8-INT4 quant is slow for long output
+REQUEST_TIMEOUT = 3600  # 60 min per prompt — full-weight model is slow for long output
+MAX_CONTINUATIONS = 3   # max follow-up requests if output is truncated
 
 # ---------------------------------------------------------------------------
 # AOM source files to inject as context (~70-90K tokens total, fits in 197K)
@@ -825,22 +826,83 @@ PROMPTS = [
 # Helper: send a prompt to the vLLM OpenAI-compatible endpoint
 # ---------------------------------------------------------------------------
 
-def send_prompt(base_url: str, model: str, system: str, messages: list,
-                max_tokens: int, temperature: float, timeout: int) -> dict:
-    """Send a chat completion request to vLLM. Returns the raw JSON response."""
+def send_prompt_streaming(base_url: str, model: str, system: str, messages: list,
+                          max_tokens: int, temperature: float, timeout: int,
+                          log_fn=None) -> dict:
+    """Send a chat completion request to vLLM with streaming enabled.
+
+    Streams the response so partial output is captured even on timeout.
+    Returns a dict matching the non-streaming response format:
+      {"choices": [{"message": {"content": text}, "finish_reason": reason}],
+       "usage": {...}}
+    """
     url = f"{base_url.rstrip('/')}/chat/completions"
     payload = {
         "model": model,
         "messages": [{"role": "system", "content": system}] + messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
-        "stream": False,
-        "tool_choice": "none",   # disable tool calls for this request — server
-                                  # may have tools enabled for VS Code use
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "tool_choice": "none",
     }
-    resp = requests.post(url, json=payload, timeout=timeout)
-    resp.raise_for_status()
-    return resp.json()
+
+    collected_text = []
+    finish_reason = None
+    usage = {}
+    timed_out = False
+
+    try:
+        resp = requests.post(url, json=payload, timeout=(30, timeout), stream=True)
+        resp.raise_for_status()
+
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data: "):
+                continue
+            data_str = line[len("data: "):]
+            if data_str.strip() == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+
+            # Usage comes in the final chunk (stream_options.include_usage)
+            if chunk.get("usage"):
+                usage = chunk["usage"]
+
+            choices = chunk.get("choices", [])
+            if not choices:
+                continue
+
+            delta = choices[0].get("delta", {})
+            if "content" in delta and delta["content"]:
+                collected_text.append(delta["content"])
+
+            if choices[0].get("finish_reason"):
+                finish_reason = choices[0]["finish_reason"]
+
+    except requests.exceptions.ReadTimeout:
+        timed_out = True
+        if log_fn:
+            log_fn(f"  ⏱ Stream timed out — captured {len(collected_text)} chunks so far")
+    except requests.exceptions.ConnectionError:
+        if collected_text:
+            timed_out = True
+            if log_fn:
+                log_fn(f"  ⏱ Connection lost — captured {len(collected_text)} chunks")
+        else:
+            raise
+
+    text = "".join(collected_text)
+
+    if timed_out and not finish_reason:
+        finish_reason = "timeout"
+
+    return {
+        "choices": [{"message": {"content": text}, "finish_reason": finish_reason or "unknown"}],
+        "usage": usage,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1039,62 +1101,122 @@ def main():
             log(f"  Total input chars: {total_chars:,} (~{est_tokens:,} tokens estimated)")
             log(f"  Prompt text: {len(prompt_info['prompt'])} chars")
             log(f"  AOM context: {len(aom_context)} chars")
-            log(f"  Budget remaining: ~{197000 - est_tokens - args.max_tokens:,} tokens")
+            log(f"  Budget remaining: ~{131000 - est_tokens - args.max_tokens:,} tokens")
             log("")
             continue
 
-        # Send to model
+        # Send to model with continuation support
+        # If the model truncates (finish_reason=length) or times out with partial
+        # output, we save the checkpoint and ask it to continue.
         start_time = time.time()
+        full_text = ""
+        continuation = 0
+        cur_messages = list(messages)
+        total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        final_finish_reason = None
+
         try:
-            log(f"  Sending to model ({len(messages)} messages)...")
-            response = send_prompt(
-                base_url=args.base_url,
-                model=args.model,
-                system=SYSTEM_PROMPT,
-                messages=messages,
-                max_tokens=args.max_tokens,
-                temperature=args.temperature,
-                timeout=args.timeout,
-            )
-            elapsed = time.time() - start_time
+            while continuation <= MAX_CONTINUATIONS:
+                label = f"(continuation {continuation})" if continuation > 0 else ""
+                log(f"  Sending to model ({len(cur_messages)} messages) {label}...")
 
-            # Extract response text
-            choice = response["choices"][0]
-            text = choice["message"]["content"]
-            finish_reason = choice.get("finish_reason", "unknown")
-            usage = response.get("usage", {})
+                response = send_prompt_streaming(
+                    base_url=args.base_url,
+                    model=args.model,
+                    system=SYSTEM_PROMPT,
+                    messages=cur_messages,
+                    max_tokens=args.max_tokens,
+                    temperature=args.temperature,
+                    timeout=args.timeout,
+                    log_fn=log,
+                )
+                elapsed = time.time() - start_time
 
-            log(f"  Received response in {elapsed:.1f}s")
-            log(f"  Finish reason: {finish_reason}")
-            log(f"  Tokens — prompt: {usage.get('prompt_tokens', '?')}, "
-                f"completion: {usage.get('completion_tokens', '?')}, "
-                f"total: {usage.get('total_tokens', '?')}")
+                choice = response["choices"][0]
+                text = choice["message"]["content"]
+                finish_reason = choice.get("finish_reason", "unknown")
+                usage = response.get("usage", {})
 
-            if finish_reason == "length":
-                log(f"  ⚠ WARNING: Output was TRUNCATED (hit max_tokens={args.max_tokens})")
-                log(f"  Consider re-running with --max-tokens {args.max_tokens * 2}")
+                # Accumulate usage
+                for k in total_usage:
+                    total_usage[k] += usage.get(k, 0)
+
+                log(f"  Received response in {elapsed:.1f}s total")
+                log(f"  Finish reason: {finish_reason}")
+                log(f"  Tokens — prompt: {usage.get('prompt_tokens', '?')}, "
+                    f"completion: {usage.get('completion_tokens', '?')}, "
+                    f"total: {usage.get('total_tokens', '?')}")
+
+                full_text += text
+
+                # Check if we need to continue
+                if finish_reason in ("length", "timeout") and text.strip():
+                    continuation += 1
+                    if continuation > MAX_CONTINUATIONS:
+                        log(f"  ⚠ Hit max continuations ({MAX_CONTINUATIONS}), saving partial output")
+                        final_finish_reason = f"{finish_reason}_max_continuations"
+                        break
+
+                    # Save checkpoint
+                    checkpoint_path = prompt_dir / f"checkpoint_{continuation}.md"
+                    prompt_dir.mkdir(parents=True, exist_ok=True)
+                    checkpoint_path.write_text(full_text, encoding="utf-8")
+                    log(f"  ⚠ Output incomplete ({finish_reason}), saved checkpoint ({len(full_text)} chars)")
+                    log(f"  → Sending continuation {continuation}/{MAX_CONTINUATIONS}...")
+
+                    # Build continuation: append what the model wrote so far,
+                    # then ask it to continue from where it stopped
+                    cur_messages = list(messages)  # start from original context
+                    cur_messages.append({
+                        "role": "assistant",
+                        "content": full_text
+                    })
+                    cur_messages.append({
+                        "role": "user",
+                        "content": (
+                            "Your previous response was cut off. Continue EXACTLY where you "
+                            "left off — do not repeat any code you already wrote. "
+                            "Pick up from the last line and keep going until all files are complete."
+                        )
+                    })
+                elif finish_reason == "timeout" and not text.strip():
+                    # Timed out with no output at all
+                    log(f"  ✗ TIMEOUT with no output after {elapsed:.1f}s (limit: {args.timeout}s)")
+                    log(f"  Skipping to next prompt. Re-run with: --only {pid} --timeout {args.timeout * 2}")
+                    final_finish_reason = "timeout_empty"
+                    break
+                else:
+                    # Normal completion
+                    final_finish_reason = finish_reason
+                    break
+
+            if final_finish_reason == "timeout_empty":
+                continue
 
             # Save outputs
-            saved_files = extract_and_save_files(text, prompt_dir)
+            saved_files = extract_and_save_files(full_text, prompt_dir)
             log(f"  Saved raw response + extracted files: {saved_files}")
+            if continuation > 0:
+                log(f"  Total output: {len(full_text)} chars across {continuation + 1} requests")
 
             # Save the response for use as context by later prompts
-            saved_outputs[pid] = text
+            saved_outputs[pid] = full_text
 
             # Save metadata
             meta = {
                 "prompt_id": pid,
                 "prompt_name": name,
                 "timestamp": datetime.now().isoformat(),
-                "elapsed_seconds": elapsed,
-                "finish_reason": finish_reason,
-                "usage": usage,
+                "elapsed_seconds": time.time() - start_time,
+                "finish_reason": final_finish_reason,
+                "usage": total_usage,
+                "continuations": continuation,
                 "model": args.model,
                 "temperature": args.temperature,
                 "max_tokens": args.max_tokens,
                 "extracted_files": saved_files,
                 "checklist": prompt_info["checklist"],
-                "response_hash": hashlib.sha256(text.encode()).hexdigest()[:16],
+                "response_hash": hashlib.sha256(full_text.encode()).hexdigest()[:16],
             }
             (prompt_dir / "metadata.json").write_text(
                 json.dumps(meta, indent=2), encoding="utf-8"
@@ -1105,14 +1227,13 @@ def main():
             for item in prompt_info["checklist"]:
                 log(f"    [ ] {item}")
 
-        except requests.exceptions.Timeout:
-            elapsed = time.time() - start_time
-            log(f"  ✗ TIMEOUT after {elapsed:.1f}s (limit: {args.timeout}s)")
-            log(f"  Skipping to next prompt. Re-run with: --only {pid} --timeout {args.timeout * 2}")
-            continue
         except requests.exceptions.ConnectionError as e:
             log(f"  ✗ CONNECTION ERROR: {e}")
             log(f"  Is vLLM running at {args.base_url}?")
+            if full_text.strip():
+                log(f"  Saving {len(full_text)} chars of partial output before exit")
+                prompt_dir.mkdir(parents=True, exist_ok=True)
+                extract_and_save_files(full_text, prompt_dir)
             sys.exit(1)
         except requests.exceptions.HTTPError as e:
             log(f"  ✗ HTTP ERROR: {e}")
@@ -1123,6 +1244,10 @@ def main():
             continue
         except Exception as e:
             log(f"  ✗ UNEXPECTED ERROR: {type(e).__name__}: {e}")
+            if full_text.strip():
+                log(f"  Saving {len(full_text)} chars of partial output")
+                prompt_dir.mkdir(parents=True, exist_ok=True)
+                extract_and_save_files(full_text, prompt_dir)
             continue
 
         log("")
