@@ -1,0 +1,3 @@
+while (atomic_load(&job->status) != AV1_COPY_COMPLETE) {
+    // wait...
+}

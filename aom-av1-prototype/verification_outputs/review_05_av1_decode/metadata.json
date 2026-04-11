@@ -1,0 +1,22 @@
+{
+  "task_id": "review_05_av1_decode",
+  "phase": 1,
+  "title": "Phase 1 Review: av1_decode \u2014 Serial Decode with AU = TD-to-TD",
+  "timestamp": "2026-04-11T11:31:20.332501",
+  "elapsed_seconds": 2046.8968892097473,
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 14081,
+    "completion_tokens": 11540,
+    "total_tokens": 25621
+  },
+  "continuations": 0,
+  "model": "MiniMax-M2.5",
+  "extracted_files": [
+    "unnamed_1.c",
+    "unnamed_2.c",
+    "av1_decoder_api.c",
+    "test_av1_decode.c"
+  ],
+  "response_hash": "5e93635159a08f6e"
+}

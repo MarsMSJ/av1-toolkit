@@ -1,0 +1,20 @@
+{
+  "task_id": "consistency",
+  "phase": 2,
+  "title": "Phase 2: Cross-Prompt API Consistency Check",
+  "timestamp": "2026-04-11T14:09:24.075704",
+  "elapsed_seconds": 729.6994783878326,
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 12893,
+    "completion_tokens": 3974,
+    "total_tokens": 16867
+  },
+  "continuations": 0,
+  "model": "MiniMax-M2.5",
+  "extracted_files": [
+    "unnamed_1.c",
+    "av1_decoder_api.h"
+  ],
+  "response_hash": "3aa34c7b02a332bd"
+}

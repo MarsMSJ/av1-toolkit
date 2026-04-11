@@ -1,0 +1,110 @@
+[2026-04-11 09:17:48] === AV1 Decoder Verification Runner ===
+[2026-04-11 09:17:48] Base URL: http://192.168.1.120:8000/v1
+[2026-04-11 09:17:48] Model: MiniMax-M2.5
+[2026-04-11 09:17:48] Phases: [1, 2, 3]
+[2026-04-11 09:17:48] Prompt outputs: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/prompt_outputs
+[2026-04-11 09:17:48] Verification outputs: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/verification_outputs
+[2026-04-11 09:17:48] 
+[2026-04-11 09:17:48] Connected to vLLM.
+[2026-04-11 09:17:48] 
+[2026-04-11 09:17:48] Total tasks: 11
+[2026-04-11 09:17:48] 
+[2026-04-11 09:17:48] ============================================================
+[2026-04-11 09:17:48] Phase 1 Review: malloc/memalign/free Override Layer
+[2026-04-11 09:17:48] ============================================================
+[2026-04-11 09:17:48]   Sending (1 messages) ...
+[2026-04-11 09:46:28]   Response in 1720.0s — stop — tokens: 9594
+[2026-04-11 09:46:28]   Saved: ['unnamed_1.c', 'unnamed_2.c', 'unnamed_3.c', 'unnamed_4.c', 'unnamed_5.c', 'unnamed_6.c', 'av1_mem_override.c', 'av1_mem_override.h', 'test_mem_override.c']
+[2026-04-11 09:46:28]   Metadata saved: finish_reason=stop
+[2026-04-11 09:46:28] 
+[2026-04-11 09:46:28] ============================================================
+[2026-04-11 09:46:28] Phase 1 Review: Job Queue (Simple Mutex-Based)
+[2026-04-11 09:46:28] ============================================================
+[2026-04-11 09:46:28]   Sending (1 messages) ...
+[2026-04-11 09:57:51]   Response in 683.0s — stop — tokens: 3818
+[2026-04-11 09:57:51]   Saved: ['unnamed_1.c', 'unnamed_2.c', 'test_job_queue.c']
+[2026-04-11 09:57:51]   Metadata saved: finish_reason=stop
+[2026-04-11 09:57:51] 
+[2026-04-11 09:57:51] ============================================================
+[2026-04-11 09:57:51] Phase 1 Review: av1_query_memory and av1_create_decoder
+[2026-04-11 09:57:51] ============================================================
+[2026-04-11 09:57:51]   Sending (1 messages) ...
+[2026-04-11 10:33:06]   Response in 2114.1s — stop — tokens: 12188
+[2026-04-11 10:33:06]   Saved: ['unnamed_1.c', 'unnamed_2.c', 'av1_decoder_api.c', 'test_query_create.c']
+[2026-04-11 10:33:06]   Metadata saved: finish_reason=stop
+[2026-04-11 10:33:06] 
+[2026-04-11 10:33:06] ============================================================
+[2026-04-11 10:33:06] Phase 1 Review: Copy Thread
+[2026-04-11 10:33:06] ============================================================
+[2026-04-11 10:33:06]   Sending (1 messages) ...
+[2026-04-11 10:57:13]   Response in 1447.4s — stop — tokens: 8451
+[2026-04-11 10:57:13]   Saved: ['unnamed_1.c', 'unnamed_2.c', 'unnamed_3.c', 'unnamed_4.c', 'unnamed_5.c', 'av1_copy_thread.c', 'av1_copy_thread.h', 'test_copy_thread.c']
+[2026-04-11 10:57:13]   Metadata saved: finish_reason=stop
+[2026-04-11 10:57:13] 
+[2026-04-11 10:57:13] ============================================================
+[2026-04-11 10:57:13] Phase 1 Review: av1_decode — Serial Decode with AU = TD-to-TD
+[2026-04-11 10:57:13] ============================================================
+[2026-04-11 10:57:13]   Sending (1 messages) ...
+[2026-04-11 11:31:20]   Response in 2046.9s — stop — tokens: 11540
+[2026-04-11 11:31:20]   Saved: ['unnamed_1.c', 'unnamed_2.c', 'av1_decoder_api.c', 'test_av1_decode.c']
+[2026-04-11 11:31:20]   Metadata saved: finish_reason=stop
+[2026-04-11 11:31:20] 
+[2026-04-11 11:31:20] ============================================================
+[2026-04-11 11:31:20] Phase 1 Review: av1_sync, av1_set_output, av1_receive_output
+[2026-04-11 11:31:20] ============================================================
+[2026-04-11 11:31:20]   Sending (1 messages) ...
+[2026-04-11 12:22:10]   Response in 3050.6s — length — tokens: 16384
+[2026-04-11 12:22:10]   Checkpoint saved (61639 chars), continuing...
+[2026-04-11 12:22:10]   Sending (3 messages) (continuation 1)...
+[2026-04-11 12:28:16]   Response in 3416.4s — stop — tokens: 1668
+[2026-04-11 12:28:16]   Saved: ['unnamed_1.c', 'unnamed_2.c', 'unnamed_3.c', 'unnamed_4.c', 'unnamed_5.c', 'unnamed_6.c', 'unnamed_7.c', 'unnamed_8.c', 'av1_decoder_api.c', 'test_sync_output.c']
+[2026-04-11 12:28:16]   Metadata saved: finish_reason=stop
+[2026-04-11 12:28:16] 
+[2026-04-11 12:28:16] ============================================================
+[2026-04-11 12:28:16] Phase 1 Review: av1_flush and av1_destroy_decoder
+[2026-04-11 12:28:16] ============================================================
+[2026-04-11 12:28:16]   Sending (1 messages) ...
+[2026-04-11 13:05:50]   Response in 2253.3s — stop — tokens: 12500
+[2026-04-11 13:05:50]   Saved: ['unnamed_1.c', 'unnamed_2.c', 'unnamed_3.c', 'unnamed_4.c', 'unnamed_5.c', 'unnamed_6.c', 'unnamed_7.c', 'unnamed_8.c', 'av1_decoder_api.c']
+[2026-04-11 13:05:50]   Metadata saved: finish_reason=stop
+[2026-04-11 13:05:50] 
+[2026-04-11 13:05:50] ============================================================
+[2026-04-11 13:05:50] Phase 1 Review: GPU Thread Stub
+[2026-04-11 13:05:50] ============================================================
+[2026-04-11 13:05:50]   Sending (1 messages) ...
+[2026-04-11 13:28:46]   Response in 1376.0s — stop — tokens: 8139
+[2026-04-11 13:28:46]   Saved: ['unnamed_1.c', 'unnamed_2.c', 'unnamed_3.c', 'av1_gpu_thread.c', 'test_gpu_thread.c']
+[2026-04-11 13:28:46]   Metadata saved: finish_reason=stop
+[2026-04-11 13:28:46] 
+[2026-04-11 13:28:46] ============================================================
+[2026-04-11 13:28:46] Phase 1 Review: End-to-End Integration Test
+[2026-04-11 13:28:46] ============================================================
+[2026-04-11 13:28:46]   Sending (1 messages) ...
+[2026-04-11 13:57:14]   Response in 1708.3s — stop — tokens: 10007
+[2026-04-11 13:57:14]   Saved: ['unnamed_1.c', 'unnamed_2.c', 'generate_test_ivf.c', 'test_e2e.c']
+[2026-04-11 13:57:14]   Metadata saved: finish_reason=stop
+[2026-04-11 13:57:14] 
+[2026-04-11 13:57:14] ============================================================
+[2026-04-11 13:57:14] Phase 2: Cross-Prompt API Consistency Check
+[2026-04-11 13:57:14] ============================================================
+[2026-04-11 13:57:14]   Sending (1 messages) ...
+[2026-04-11 14:09:24]   Response in 729.7s — stop — tokens: 3974
+[2026-04-11 14:09:24]   Saved: ['unnamed_1.c', 'av1_decoder_api.h']
+[2026-04-11 14:09:24]   Metadata saved: finish_reason=stop
+[2026-04-11 14:09:24] 
+[2026-04-11 14:09:24] ============================================================
+[2026-04-11 14:09:24] Phase 3: Unified Source Tree + Makefile
+[2026-04-11 14:09:24] ============================================================
+[2026-04-11 14:09:24]   Sending (1 messages) ...
+[2026-04-11 15:07:47]   Response in 3503.6s — length — tokens: 16384
+[2026-04-11 15:07:47]   Checkpoint saved (65624 chars), continuing...
+[2026-04-11 15:07:47]   Sending (3 messages) (continuation 1)...
+[2026-04-11 16:08:06]   Response in 7122.9s — length — tokens: 16384
+[2026-04-11 16:08:06]   Checkpoint saved (122713 chars), continuing...
+[2026-04-11 16:08:06]   Sending (3 messages) (continuation 2)...
+[2026-04-11 16:22:32]   Response in 7988.4s — stop — tokens: 3329
+[2026-04-11 16:22:32]   Saved: ['unnamed_1.c', 'unnamed_2.c', 'unnamed_3.c', 'unnamed_4.c', 'unnamed_5.c', 'unnamed_6.c', 'unnamed_7.c', 'unnamed_8.c', 'unnamed_9.c', 'unnamed_10.c', 'unnamed_11.c', 'unnamed_12.c', 'unnamed_13.c', 'unnamed_14.c', 'unnamed_15.c', 'unnamed_16.c', 'unnamed_17.c', 'unnamed_18.c', 'unnamed_19.c', 'unnamed_20.c', 'av1_decoder_api.h', 'av1_decoder_api.c', 'av1_copy_thread.h', 'av1_copy_thread.c', 'av1_gpu_thread.h', 'av1_gpu_thread.c', 'av1_mem_override.h', 'av1_mem_override.c', 'av1_job_queue.h', 'av1_job_queue.c', 'ivf_parser.h', 'ivf_parser.c', 'y4m_writer.h', 'y4m_writer.c', 'test_mem_override.c', 'test_job_queue.c', 'test_copy_thread.c', 'test_gpu_thread.c', 'test_e2e.c', 'generate_test_ivf.c']
+[2026-04-11 16:22:32]   Metadata saved: finish_reason=stop
+[2026-04-11 16:22:32] 
+[2026-04-11 16:22:32] === Verification complete ===
+[2026-04-11 16:22:32] Outputs: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/verification_outputs
