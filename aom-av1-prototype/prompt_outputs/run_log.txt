@@ -322,3 +322,145 @@
 [2026-04-11 02:19:34] === Run complete ===
 [2026-04-11 02:19:34] Outputs saved to: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/prompt_outputs
 [2026-04-11 02:19:34] Log saved to: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/prompt_outputs/run_log.txt
+[2026-04-11 04:28:11] === AV1 Decoder Prompt Runner ===
+[2026-04-11 04:28:11] Base URL: http://192.168.1.120:8000/v1
+[2026-04-11 04:28:11] Model: MiniMax-M2.5
+[2026-04-11 04:28:11] Max tokens: 16384
+[2026-04-11 04:28:11] Temperature: 0.2
+[2026-04-11 04:28:11] Output dir: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/prompt_outputs
+[2026-04-11 04:28:11] AOM source dir: NOT FOUND — prompts will lack source context
+[2026-04-11 04:28:11] Running prompts: [5, 6, 7, 9]
+[2026-04-11 04:28:11] Previously completed (will use as context): [1, 2, 3, 4, 8]
+[2026-04-11 04:28:11] Previously saved outputs available: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+[2026-04-11 04:28:11] 
+[2026-04-11 04:28:11] Connected to vLLM. Available models: [
+  {
+    "id": "MiniMax-M2.5",
+    "object": "model",
+    "created": 1775906891,
+    "owned_by": "vllm",
+    "root": "/root/.cache/huggingface/MiniMaxAI/MiniMax-M2.5",
+    "parent": null,
+    "max_model_len": 131072,
+    "permission": [
+      {
+        "id": "modelperm-86cc735f8efc04e5",
+        "object": "model_permission",
+        "created": 1775906891,
+        "allow_create_engine": false,
+        "allow_sampling": true,
+        "allow_logprobs": true,
+        "allow_search_indices": false,
+        "allow_view": true,
+        "allow_fine_tuning": false,
+        "organization": "*",
+        "group": null,
+        "is_blocking": false
+      }
+    ]
+  }
+]
+[2026-04-11 04:28:11] 
+[2026-04-11 04:28:11] ============================================================
+[2026-04-11 04:28:11] PROMPT 5: av1_decode — Serial Decode with AU = TD-to-TD
+[2026-04-11 04:28:11] ============================================================
+[2026-04-11 04:28:11]   Injecting prior output: Prompt 1 (malloc_override) — 26906 chars
+[2026-04-11 04:28:11]   Injecting prior output: Prompt 2 (job_queue) — 14203 chars
+[2026-04-11 04:28:11]   Injecting prior output: Prompt 3 (query_create) — 40400 chars
+[2026-04-11 04:28:11]   Sending to model (7 messages) ...
+[2026-04-11 05:10:03]   Received response in 2511.7s total
+[2026-04-11 05:10:03]   Finish reason: stop
+[2026-04-11 05:10:03]   Tokens — prompt: 22217, completion: 14213, total: 36430
+[2026-04-11 05:10:03]   Saved raw response + extracted files: ['unnamed_1.c', 'unnamed_2.c', 'unnamed_3.c', 'unnamed_4.c', 'unnamed_5.c', 'av1_decoder_api.h', 'av1_decoder_api.c', 'ivf_parser.h', 'ivf_parser.c', 'test_av1_decode.c']
+[2026-04-11 05:10:03]   Metadata saved: finish_reason=stop
+[2026-04-11 05:10:03]   Verification checklist for Prompt 5:
+[2026-04-11 05:10:03]     [ ] Decodes AV1 bitstream without crashing
+[2026-04-11 05:10:03]     [ ] Frame ready flag set correctly for show_frame / show_existing
+[2026-04-11 05:10:03]     [ ] Non-display frames (reference only) produce frame_ready=0
+[2026-04-11 05:10:03]     [ ] QUEUE_FULL returned when ready queue is full
+[2026-04-11 05:10:03]     [ ] Frame IDs are monotonically increasing
+[2026-04-11 05:10:03]     [ ] State transitions correct (CREATED -> DECODING)
+[2026-04-11 05:10:03] 
+[2026-04-11 05:10:03] ============================================================
+[2026-04-11 05:10:03] PROMPT 6: av1_sync, av1_set_output, av1_receive_output
+[2026-04-11 05:10:03] ============================================================
+[2026-04-11 05:10:03]   Injecting prior output: Prompt 2 (job_queue) — 14203 chars
+[2026-04-11 05:10:03]   Injecting prior output: Prompt 3 (query_create) — 40400 chars
+[2026-04-11 05:10:03]   Injecting prior output: Prompt 4 (copy_thread) — 23313 chars
+[2026-04-11 05:10:03]   Injecting prior output: Prompt 5 (av1_decode) — 58183 chars
+[2026-04-11 05:10:03]   Sending to model (9 messages) ...
+[2026-04-11 06:02:35]   Received response in 3152.2s total
+[2026-04-11 06:02:35]   Finish reason: length
+[2026-04-11 06:02:35]   Tokens — prompt: 35538, completion: 16384, total: 51922
+[2026-04-11 06:02:35]   ⚠ Output incomplete (length), saved checkpoint (66044 chars)
+[2026-04-11 06:02:35]   → Sending continuation 1/3...
+[2026-04-11 06:02:35]   Sending to model (11 messages) (continuation 1)...
+[2026-04-11 06:13:40]   Received response in 3817.6s total
+[2026-04-11 06:13:40]   Finish reason: stop
+[2026-04-11 06:13:40]   Tokens — prompt: 51475, completion: 3381, total: 54856
+[2026-04-11 06:13:40]   Saved raw response + extracted files: ['unnamed_1.c', 'unnamed_2.c', 'unnamed_3.c', 'unnamed_4.c', 'unnamed_5.c', 'av1_decoder_api.h', 'av1_decoder_api.c', 'y4m_writer.h', 'y4m_writer.c', 'test_sync_output.c']
+[2026-04-11 06:13:40]   Total output: 79048 chars across 2 requests
+[2026-04-11 06:13:40]   Metadata saved: finish_reason=stop
+[2026-04-11 06:13:40]   Verification checklist for Prompt 6:
+[2026-04-11 06:13:40]     [ ] Full decode -> sync -> set_output -> receive_output pipeline works
+[2026-04-11 06:13:40]     [ ] Output is bit-exact with aomdec reference output
+[2026-04-11 06:13:40]     [ ] Multiple frames decoded and output correctly
+[2026-04-11 06:13:40]     [ ] DPB slots are freed after receive_output (no leak / exhaustion)
+[2026-04-11 06:13:40]     [ ] Timeout works on av1_sync and av1_receive_output
+[2026-04-11 06:13:40] 
+[2026-04-11 06:13:40] ============================================================
+[2026-04-11 06:13:40] PROMPT 7: av1_flush and av1_destroy_decoder
+[2026-04-11 06:13:40] ============================================================
+[2026-04-11 06:13:40]   Injecting prior output: Prompt 3 (query_create) — 40400 chars
+[2026-04-11 06:13:40]   Injecting prior output: Prompt 4 (copy_thread) — 23313 chars
+[2026-04-11 06:13:40]   Injecting prior output: Prompt 5 (av1_decode) — 58183 chars
+[2026-04-11 06:13:40]   Injecting prior output: Prompt 6 (sync_output) — 79048 chars
+[2026-04-11 06:13:40]   Sending to model (9 messages) ...
+[2026-04-11 07:09:18]   Received response in 3338.0s total
+[2026-04-11 07:09:18]   Finish reason: length
+[2026-04-11 07:09:18]   Tokens — prompt: 50648, completion: 16384, total: 67032
+[2026-04-11 07:09:18]   ⚠ Output incomplete (length), saved checkpoint (66243 chars)
+[2026-04-11 07:09:18]   → Sending continuation 1/3...
+[2026-04-11 07:09:18]   Sending to model (11 messages) (continuation 1)...
+[2026-04-11 07:17:51]   Received response in 3850.6s total
+[2026-04-11 07:17:51]   Finish reason: stop
+[2026-04-11 07:17:51]   Tokens — prompt: 66672, completion: 2287, total: 68959
+[2026-04-11 07:17:51]   Saved raw response + extracted files: ['unnamed_1.c', 'unnamed_2.c', 'unnamed_3.c', 'av1_decoder_api.h', 'av1_decoder_api.c', 'test_flush_destroy.c']
+[2026-04-11 07:17:51]   Total output: 75068 chars across 2 requests
+[2026-04-11 07:17:51]   Metadata saved: finish_reason=stop
+[2026-04-11 07:17:51]   Verification checklist for Prompt 7:
+[2026-04-11 07:17:51]     [ ] Flush + drain cycle works (END_OF_STREAM returned correctly)
+[2026-04-11 07:17:51]     [ ] Destroy after flush is clean
+[2026-04-11 07:17:51]     [ ] Destroy without flush doesn't hang
+[2026-04-11 07:17:51]     [ ] Destroy with no decodes doesn't crash
+[2026-04-11 07:17:51]     [ ] No thread leaks (all threads joined)
+[2026-04-11 07:17:51]     [ ] AddressSanitizer clean (no leaks)
+[2026-04-11 07:17:51] 
+[2026-04-11 07:17:51] ============================================================
+[2026-04-11 07:17:51] PROMPT 9: End-to-End Integration Test
+[2026-04-11 07:17:51] ============================================================
+[2026-04-11 07:17:51]   Injecting prior output: Prompt 1 (malloc_override) — 26906 chars
+[2026-04-11 07:17:51]   Injecting prior output: Prompt 2 (job_queue) — 14203 chars
+[2026-04-11 07:17:51]   Injecting prior output: Prompt 3 (query_create) — 40400 chars
+[2026-04-11 07:17:51]   Injecting prior output: Prompt 4 (copy_thread) — 23313 chars
+[2026-04-11 07:17:51]   Injecting prior output: Prompt 5 (av1_decode) — 58183 chars
+[2026-04-11 07:17:51]   Injecting prior output: Prompt 6 (sync_output) — 79048 chars
+[2026-04-11 07:17:51]   Injecting prior output: Prompt 7 (flush_destroy) — 75068 chars
+[2026-04-11 07:17:51]   Sending to model (15 messages) ...
+[2026-04-11 07:58:26]   Received response in 2434.8s total
+[2026-04-11 07:58:26]   Finish reason: stop
+[2026-04-11 07:58:26]   Tokens — prompt: 80042, completion: 10855, total: 90897
+[2026-04-11 07:58:26]   Saved raw response + extracted files: ['unnamed_1.c', 'unnamed_2.c', 'unnamed_3.c', 'unnamed_4.c', 'unnamed_5.c', 'unnamed_6.c', 'unnamed_7.c', 'unnamed_8.c', 'unnamed_9.c', 'test_e2e.c', 'generate_test_ivf.c']
+[2026-04-11 07:58:26]   Metadata saved: finish_reason=stop
+[2026-04-11 07:58:26]   Verification checklist for Prompt 9:
+[2026-04-11 07:58:26]     [ ] Successfully decodes at least one AV1 .ivf test vector
+[2026-04-11 07:58:26]     [ ] Output matches aomdec bit-exactly
+[2026-04-11 07:58:26]     [ ] QUEUE_FULL handling works (drain + retry succeeds)
+[2026-04-11 07:58:26]     [ ] Flush drains all remaining frames
+[2026-04-11 07:58:26]     [ ] No memory leaks (AddressSanitizer clean)
+[2026-04-11 07:58:26]     [ ] No thread leaks (all threads joined at exit)
+[2026-04-11 07:58:26]     [ ] IVF parser handles edge cases (empty file, truncated frame)
+[2026-04-11 07:58:26] 
+[2026-04-11 07:58:26] === Run complete ===
+[2026-04-11 07:58:26] Outputs saved to: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/prompt_outputs
+[2026-04-11 07:58:26] Log saved to: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/prompt_outputs/run_log.txt

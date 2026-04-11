@@ -1,19 +1,26 @@
 {
   "prompt_id": 7,
   "prompt_name": "flush_destroy",
-  "timestamp": "2026-04-10T00:30:06.814546",
-  "elapsed_seconds": 63.047269344329834,
+  "timestamp": "2026-04-11T07:17:51.429899",
+  "elapsed_seconds": 3850.643099784851,
   "finish_reason": "stop",
   "usage": {
-    "prompt_tokens": 1064,
-    "total_tokens": 1423,
-    "completion_tokens": 359,
-    "prompt_tokens_details": null
+    "prompt_tokens": 117320,
+    "completion_tokens": 18671,
+    "total_tokens": 135991
   },
+  "continuations": 1,
   "model": "MiniMax-M2.5",
   "temperature": 0.2,
   "max_tokens": 16384,
-  "extracted_files": [],
+  "extracted_files": [
+    "unnamed_1.c",
+    "unnamed_2.c",
+    "unnamed_3.c",
+    "av1_decoder_api.h",
+    "av1_decoder_api.c",
+    "test_flush_destroy.c"
+  ],
   "checklist": [
     "Flush + drain cycle works (END_OF_STREAM returned correctly)",
     "Destroy after flush is clean",
@@ -22,5 +29,5 @@
     "No thread leaks (all threads joined)",
     "AddressSanitizer clean (no leaks)"
   ],
-  "response_hash": "6348eb50371e0328"
+  "response_hash": "f9d5a6909b66ec12"
 }

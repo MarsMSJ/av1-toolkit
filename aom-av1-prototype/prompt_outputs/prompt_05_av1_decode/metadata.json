@@ -1,19 +1,30 @@
 {
   "prompt_id": 5,
   "prompt_name": "av1_decode",
-  "timestamp": "2026-04-10T00:28:16.165208",
-  "elapsed_seconds": 128.98908042907715,
+  "timestamp": "2026-04-11T05:10:03.224347",
+  "elapsed_seconds": 2511.67365527153,
   "finish_reason": "stop",
   "usage": {
-    "prompt_tokens": 1015,
-    "total_tokens": 1614,
-    "completion_tokens": 599,
-    "prompt_tokens_details": null
+    "prompt_tokens": 22217,
+    "completion_tokens": 14213,
+    "total_tokens": 36430
   },
+  "continuations": 0,
   "model": "MiniMax-M2.5",
   "temperature": 0.2,
   "max_tokens": 16384,
-  "extracted_files": [],
+  "extracted_files": [
+    "unnamed_1.c",
+    "unnamed_2.c",
+    "unnamed_3.c",
+    "unnamed_4.c",
+    "unnamed_5.c",
+    "av1_decoder_api.h",
+    "av1_decoder_api.c",
+    "ivf_parser.h",
+    "ivf_parser.c",
+    "test_av1_decode.c"
+  ],
   "checklist": [
     "Decodes AV1 bitstream without crashing",
     "Frame ready flag set correctly for show_frame / show_existing",
@@ -22,5 +33,5 @@
     "Frame IDs are monotonically increasing",
     "State transitions correct (CREATED -> DECODING)"
   ],
-  "response_hash": "a993e32993cacdf1"
+  "response_hash": "60350d7f197773ba"
 }

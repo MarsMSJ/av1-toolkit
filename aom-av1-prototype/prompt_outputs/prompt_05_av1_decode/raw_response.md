@@ -1,10 +1,1832 @@
 
 
-I'll implement the `av1_decode()` function along with the IVF parser and test. Let me start by examining what exists and then create the complete solution.
+I'll implement the `av1_decode()` function along with the IVF parser and test file. Let me create the updated and new files.
 
-First, let me check the existing API files to understand the structures:
-<minimax:tool_call>
-<invoke name="Read">
-<parameter name="file_path">/home/user/dev-tools/av1-toolkit/aom-av1-prototype/src/av1_decoder_api.h</parameter>
-</invoke>
-</minimax:tool_call>
+### av1_decoder_api.h
+```c
+#ifndef AV1_DECODER_API_H
+#define AV1_DECODER_API_H
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+
+// Forward declarations
+struct Av1Decoder;
+typedef struct Av1Decoder Av1Decoder;
+
+// Include stream info from memory override
+#include "av1_mem_override.h"
+
+// ============================================================================
+// Memory Requirements Structure
+// ============================================================================
+
+typedef struct Av1MemoryBreakdown {
+    size_t frame_buffers;      // DPB frame buffers (with border)
+    size_t dpb_count;          // Number of DPB buffers
+    size_t worker_scratch;     // Per-worker scratch memory
+    size_t worker_count;       // Number of workers
+    size_t entropy_contexts;   // Entropy context storage
+    size_t decoder_context;    // Main decoder context
+    size_t tile_data;          // Tile data storage
+    size_t mode_info_grid;     // Mode info grid
+    size_t other;              // Other allocations
+} Av1MemoryBreakdown;
+
+typedef struct Av1MemoryRequirements {
+    size_t total_size;         // Total required memory
+    size_t alignment;          // Required alignment (64 bytes)
+    Av1MemoryBreakdown breakdown;
+} Av1MemoryRequirements;
+
+// ============================================================================
+// Decoder Configuration
+// ============================================================================
+
+typedef struct Av1ThreadConfig {
+    int priority;              // Thread priority (0 = default, higher = higher)
+    int cpu_affinity;          // CPU affinity mask (-1 = no affinity)
+    int core_id;               // Specific core to bind to (-1 = any)
+} Av1ThreadConfig;
+
+typedef struct Av1DecoderConfig {
+    // Memory
+    void        *memory_base;      // Caller-provided memory block
+    size_t       memory_size;      // Size of memory block
+    
+    // Queue configuration
+    int          queue_depth;      // Number of frames to buffer for reordering
+    
+    // Threading
+    int          num_worker_threads;
+    Av1ThreadConfig worker_config;     // Worker thread settings
+    Av1ThreadConfig copy_thread_config; // Copy thread settings
+    
+    // GPU configuration
+    bool         use_gpu;          // Enable GPU offload
+    int          gpu_device;       // GPU device ID (0 = default)
+    Av1ThreadConfig gpu_thread_config; // GPU thread settings
+    
+    // Decoder options
+    bool         enable_threading; // Enable multi-threaded decoding
+    bool         enable_frame_parallel; // Enable frame-level parallelism
+    int          max_tile_cols;    // Max tile columns (0 = auto)
+    int          max_tile_rows;    // Max tile rows (0 = auto)
+} Av1DecoderConfig;
+
+// ============================================================================
+// Decoder State
+// ============================================================================
+
+typedef enum {
+    AV1_DECODER_STATE_UNINITIALIZED = 0,
+    AV1_DECODER_STATE_CREATED,
+    AV1_DECODER_STATE_READY,
+    AV1_DECODER_STATE_DECODING,
+    AV1_DECODER_STATE_ERROR
+} Av1DecoderState;
+
+// ============================================================================
+// Decode Result
+// ============================================================================
+
+typedef enum {
+    AV1_OK = 0,
+    AV1_ERROR = -1,
+    AV1_QUEUE_FULL = -2,
+    AV1_INVALID_PARAM = -3,
+    AV1_NEED_MORE_DATA = -4,
+    AV1_END_OF_STREAM = -5
+} Av1DecodeResult;
+
+// ============================================================================
+// Decode Output
+// ============================================================================
+
+typedef struct Av1DecodeOutput {
+    int frame_ready;           // 1 if a frame is ready for output
+    uint32_t frame_id;         // Frame identifier (monotonic)
+    int show_existing_frame;   // 1 if this is a show_existing_frame
+    int dpb_slot;              // DPB slot where frame is stored
+} Av1DecodeOutput;
+
+// ============================================================================
+// Decoder Handle (Opaque)
+// ============================================================================
+
+// The Av1Decoder struct is defined in the implementation file
+// Users only get a pointer to it
+
+// ============================================================================
+// API Functions
+// ============================================================================
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/**
+ * Query memory requirements for a given stream configuration.
+ * 
+ * @param info           Stream information (max dimensions, bit depth, etc.)
+ * @param queue_depth    Number of frames to buffer for reordering
+ * @param num_workers    Number of decoder worker threads
+ * @return Av1MemoryRequirements with total size and breakdown
+ */
+Av1MemoryRequirements av1_query_memory(const Av1StreamInfo *info, 
+                                        int queue_depth, 
+                                        int num_workers);
+
+/**
+ * Create and initialize an AV1 decoder instance.
+ * 
+ * @param config Decoder configuration
+ * @return Decoder handle on success, NULL on failure
+ */
+Av1Decoder *av1_create_decoder(const Av1DecoderConfig *config);
+
+/**
+ * Destroy a decoder instance and release all resources.
+ * 
+ * @param decoder Decoder handle to destroy
+ * @return 0 on success, -1 on error
+ */
+int av1_destroy_decoder(Av1Decoder *decoder);
+
+/**
+ * Get the current state of the decoder.
+ * 
+ * @param decoder Decoder handle
+ * @return Current decoder state
+ */
+Av1DecoderState av1_get_decoder_state(const Av1Decoder *decoder);
+
+/**
+ * Get decoder configuration (for inspection).
+ * 
+ * @param decoder Decoder handle
+ * @return Pointer to internal config (do not modify), or NULL on error
+ */
+const Av1DecoderConfig *av1_get_decoder_config(const Av1Decoder *decoder);
+
+/**
+ * Get memory statistics from the allocator.
+ * 
+ * @param decoder Decoder handle
+ * @return Memory statistics (see av1_mem_override.h)
+ */
+Av1MemStats av1_get_mem_stats(const Av1Decoder *decoder);
+
+/**
+ * Reset memory statistics.
+ * 
+ * @param decoder Decoder handle
+ */
+void av1_reset_mem_stats(Av1Decoder *decoder);
+
+/**
+ * Decode an access unit (AU) of AV1 data.
+ * 
+ * This function decodes a single frame (or multiple OBUs forming an AU)
+ * synchronously. The decoded frame is placed in the ready queue if it
+ * should be displayed.
+ * 
+ * @param decoder    Decoder handle
+ * @param data       Pointer to AU data (OBUs)
+ * @param data_size  Size of data in bytes
+ * @param out_result Output structure filled with frame info (can be NULL)
+ * @return AV1_OK on success, AV1_ERROR on error, AV1_QUEUE_FULL if ready
+ *         queue is full, AV1_INVALID_PARAM if decoder state is invalid
+ */
+Av1DecodeResult av1_decode(Av1Decoder *decoder, 
+                           const uint8_t *data, 
+                           size_t data_size,
+                           Av1DecodeOutput *out_result);
+
+/**
+ * Get the next decoded frame from the ready queue.
+ * 
+ * This function retrieves a frame that was previously decoded and is
+ * waiting for output pickup.
+ * 
+ * @param decoder    Decoder handle
+ * @param out_entry  Output structure for frame entry
+ * @param timeout_us Timeout in microseconds (0 = non-blocking)
+ * @return AV1_OK on success, AV1_ERROR if no frame available
+ */
+Av1DecodeResult av1_get_decoded_frame(Av1Decoder *decoder, 
+                                       Av1FrameEntry *out_entry,
+                                       uint32_t timeout_us);
+
+/**
+ * Release a frame back to the decoder (after output).
+ * 
+ * @param decoder  Decoder handle
+ * @param frame_id Frame ID to release
+ * @return AV1_OK on success
+ */
+Av1DecodeResult av1_release_frame(Av1Decoder *decoder, uint32_t frame_id);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // AV1_DECODER_API_H
+```
+
+### av1_decoder_api.c
+```c
+#define AV1_DECODER_API_C
+#include "av1_decoder_api.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+#include <stdalign.h>
+
+// Include the memory override and job queue
+#include "av1_mem_override.h"
+#include "av1_job_queue.h"
+
+// ============================================================================
+// AOM Integration
+// ============================================================================
+
+// Include AOM headers for decoder integration
+#include "aom/aom_decoder.h"
+#include "aom/aomdx.h"
+#include "av1/av1_dx.h"
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+#define DEFAULT_ALIGNMENT      64
+#define MC_BORDER              128           // Motion compensation border
+#define BASE_DPB_COUNT         8
+#define ENTROPY_CONTEXT_PER_FRAME (75 * 1024)  // ~75KB per frame
+#define WORKER_SCRATCH_SIZE    (2 * 1024 * 1024)  // 2MB per worker
+#define DECODER_CONTEXT_SIZE   (8 * 1024 * 1024)  // 8MB
+#define TILE_DATA_SIZE         (4 * 1024 * 1024)  // 4MB
+#define MODE_INFO_GRID_SIZE    (2 * 1024 * 1024) // 2MB
+#define HEADROOM_FACTOR        1.10  // 10% headroom
+
+// ============================================================================
+// Internal Structures
+// ============================================================================
+
+typedef struct Av1WorkerThread {
+    pthread_t thread;
+    int thread_id;
+    Av1ThreadConfig config;
+    bool running;
+    void *user_data;  // For future use
+} Av1WorkerThread;
+
+typedef struct Av1CopyThread {
+    pthread_t thread;
+    Av1ThreadConfig config;
+    bool running;
+    Av1FrameQueue *input_queue;
+    Av1FrameQueue *output_queue;
+} Av1CopyThread;
+
+typedef struct Av1GPUThread {
+    pthread_t thread;
+    Av1ThreadConfig config;
+    bool running;
+    int gpu_device;
+    void *film_grain_buffer;  // For future GPU film grain
+} Av1GPUThread;
+
+struct Av1Decoder {
+    // Configuration
+    Av1DecoderConfig config;
+    Av1DecoderState state;
+    
+    // Memory allocator state
+    void *memory_base;
+    size_t memory_size;
+    bool mem_allocator_initialized;
+    
+    // AOM decoder context
+    aom_codec_ctx_t aom_decoder;
+    bool aom_decoder_initialized;
+    
+    // Frame queues
+    Av1FrameQueue ready_queue;         // Decoded frames ready for output
+    Av1FrameQueue output_queue;        // Frames pending output pickup
+    
+    // Queue storage
+    Av1FrameEntry *queue_storage;
+    int queue_storage_size;
+    
+    // Frame ID counter (monotonic)
+    uint32_t next_frame_id;
+    
+    // Worker threads
+    Av1WorkerThread *workers;
+    int num_workers;
+    
+    // Copy thread
+    Av1CopyThread *copy_thread;
+    
+    // GPU thread (optional)
+    Av1GPUThread *gpu_thread;
+    bool has_gpu_thread;
+    
+    // Statistics
+    uint64_t frames_decoded;
+    uint64_t frames_output;
+    uint64_t decode_errors;
+    
+    // Thread safety
+    pthread_mutex_t decoder_mutex;
+    pthread_cond_t decoder_cond;
+};
+
+// ============================================================================
+// Internal Functions
+// ============================================================================
+
+static size_t calculate_frame_buffer_size(int width, int height, int bit_depth, 
+                                           int chroma_subsampling) {
+    // Add border for motion compensation
+    int padded_width = width + 2 * MC_BORDER;
+    int padded_height = height + 2 * MC_BORDER;
+    
+    // Bytes per pixel
+    int bytes_per_pixel = (bit_depth > 8) ? 2 : 1;
+    
+    // Chroma factor
+    double chroma_factor;
+    switch (chroma_subsampling) {
+        case 2: chroma_factor = 3.0; break;   // 444
+        case 1: chroma_factor = 2.0; break;   // 422
+        default: chroma_factor = 1.5; break;  // 420
+    }
+    
+    // Total size
+    size_t size = (size_t)padded_width * padded_height * bytes_per_pixel * (size_t)chroma_factor;
+    
+    // Add some overhead for alignment and additional planes
+    size = (size + 4095) & ~4095;  // 4KB alignment
+    
+    return size;
+}
+
+static int set_thread_priority(pthread_t thread, const Av1ThreadConfig *config) {
+    if (!config) {
+        return 0;
+    }
+    
+    // Set thread priority if specified
+    if (config->priority != 0) {
+        struct sched_param param;
+        int policy;
+        
+        if (pthread_getschedparam(thread, &policy, &param) == 0) {
+            param.sched_priority = config->priority;
+            // Clamp priority to valid range
+            int min_priority = sched_get_priority_min(policy);
+            int max_priority = sched_get_priority_max(policy);
+            if (param.sched_priority < min_priority) {
+                param.sched_priority = min_priority;
+            }
+            if (param.sched_priority > max_priority) {
+                param.sched_priority = max_priority;
+            }
+            pthread_setschedparam(thread, policy, &param);
+        }
+    }
+    
+    // Set CPU affinity if specified
+    if (config->cpu_affinity >= 0) {
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+        CPU_SET(config->cpu_affinity, &cpuset);
+        pthread_setaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
+    }
+    
+    return 0;
+}
+
+// ============================================================================
+// Worker Thread Implementation (Stub)
+// ============================================================================
+
+static void *worker_thread_func(void *arg) {
+    Av1WorkerThread *worker = (Av1WorkerThread *)arg;
+    
+    printf("Worker thread %d started\n", worker->thread_id);
+    
+    // Set thread priority/affinity
+    set_thread_priority(worker->thread, &worker->config);
+    
+    // Stub: In a real implementation, this would process decode jobs
+    // For now, just mark as running
+    worker->running = true;
+    
+    // Stub: Wait for work (not implemented)
+    // In real implementation, would wait on a job queue
+    
+    printf("Worker thread %d exiting\n", worker->thread_id);
+    return NULL;
+}
+
+// ============================================================================
+// Copy Thread Implementation (Stub)
+// ============================================================================
+
+static void *copy_thread_func(void *arg) {
+    Av1CopyThread *copy = (Av1CopyThread *)arg;
+    
+    printf("Copy thread started\n");
+    
+    set_thread_priority(copy->thread, &copy->config);
+    
+    copy->running = true;
+    
+    // Stub: In real implementation, would copy decoded frames to output
+    // Currently just a placeholder
+    
+    printf("Copy thread exiting\n");
+    return NULL;
+}
+
+// ============================================================================
+// GPU Thread Implementation (Stub)
+// ============================================================================
+
+static void *gpu_thread_func(void *arg) {
+    Av1GPUThread *gpu = (Av1GPUThread *)arg;
+    
+    printf("GPU thread started (device %d)\n", gpu->gpu_device);
+    
+    set_thread_priority(gpu->thread, &gpu->config);
+    
+    gpu->running = true;
+    
+    // Stub: In real implementation, would handle GPU offload
+    // (film grain synthesis, format conversion, etc.)
+    
+    printf("GPU thread exiting\n");
+    return NULL;
+}
+
+// ============================================================================
+// API Implementation
+// ============================================================================
+
+Av1MemoryRequirements av1_query_memory(const Av1StreamInfo *info, 
+                                        int queue_depth, 
+                                        int num_workers) {
+    Av1MemoryRequirements req = {0};
+    
+    if (!info || queue_depth < 0 || num_workers < 0) {
+        fprintf(stderr, "av1_query_memory: invalid parameters\n");
+        return req;
+    }
+    
+    // Use provided dimensions or defaults
+    int width = info->width > 0 ? info->width : 1920;
+    int height = info->height > 0 ? info->height : 1080;
+    int bit_depth = info->is_16bit ? 12 : (info->max_bitrate > 8 ? 10 : 8);
+    int chroma = info->chroma_subsampling;
+    
+    // 1. Frame buffer size
+    size_t frame_buffer_size = calculate_frame_buffer_size(width, height, bit_depth, chroma);
+    
+    // 2. DPB count: 8 base + queue_depth + 1 for current frame
+    int dpb_count = BASE_DPB_COUNT + queue_depth + 1;
+    req.breakdown.dpb_count = dpb_count;
+    req.breakdown.frame_buffers = frame_buffer_size * dpb_count;
+    
+    // 3. Worker scratch memory
+    int workers = num_workers > 0 ? num_workers : 4;
+    req.breakdown.worker_count = workers;
+    req.breakdown.worker_scratch = (size_t)workers * WORKER_SCRATCH_SIZE;
+    
+    // 4. Entropy contexts
+    req.breakdown.entropy_contexts = (size_t)(queue_depth + 1) * ENTROPY_CONTEXT_PER_FRAME;
+    
+    // 5. Decoder context
+    req.breakdown.decoder_context = DECODER_CONTEXT_SIZE;
+    
+    // 6. Tile data
+    req.breakdown.tile_data = TILE_DATA_SIZE;
+    
+    // 7. Mode info grid
+    req.breakdown.mode_info_grid = MODE_INFO_GRID_SIZE;
+    
+    // 8. Other (queues, thread structures, etc.)
+    size_t queue_storage = (size_t)(queue_depth + 4) * sizeof(Av1FrameEntry) * 2;
+    size_t thread_structs = (size_t)workers * sizeof(Av1WorkerThread) + 
+                            sizeof(Av1CopyThread) +
+                            sizeof(Av1GPUThread);
+    size_t decoder_struct = sizeof(Av1Decoder);
+    req.breakdown.other = queue_storage + thread_structs + decoder_struct;
+    
+    // Sum all components
+    size_t total = req.breakdown.frame_buffers +
+                   req.breakdown.worker_scratch +
+                   req.breakdown.entropy_contexts +
+                   req.breakdown.decoder_context +
+                   req.breakdown.tile_data +
+                   req.breakdown.mode_info_grid +
+                   req.breakdown.other;
+    
+    // Apply headroom
+    total = (size_t)((double)total * HEADROOM_FACTOR);
+    
+    // Apply alignment
+    req.total_size = (total + DEFAULT_ALIGNMENT - 1) & ~(DEFAULT_ALIGNMENT - 1);
+    req.alignment = DEFAULT_ALIGNMENT;
+    
+    return req;
+}
+
+Av1Decoder *av1_create_decoder(const Av1DecoderConfig *config) {
+    if (!config) {
+        fprintf(stderr, "av1_create_decoder: NULL config\n");
+        return NULL;
+    }
+    
+    // Validate configuration
+    if (!config->memory_base || config->memory_size == 0) {
+        fprintf(stderr, "av1_create_decoder: invalid memory base or size\n");
+        return NULL;
+    }
+    
+    if (config->queue_depth < 0) {
+        fprintf(stderr, "av1_create_decoder: invalid queue depth\n");
+        return NULL;
+    }
+    
+    // Query memory requirements
+    Av1StreamInfo info = {
+        .width = config->memory_size > 0 ? 1920 : 0,  // Default if not specified
+        .height = 1080,
+        .max_bitrate = 10,
+        .chroma_subsampling = 0,
+        .is_16bit = false
+    };
+    
+    Av1MemoryRequirements req = av1_query_memory(&info, 
+                                                   config->queue_depth, 
+                                                   config->num_worker_threads);
+    
+    if (config->memory_size < req.total_size) {
+        fprintf(stderr, "av1_create_decoder: memory too small. Need %zu bytes, got %zu\n",
+                req.total_size, config->memory_size);
+        return NULL;
+    }
+    
+    // Initialize memory allocator
+    if (!av1_mem_init(config->memory_base, config->memory_size)) {
+        fprintf(stderr, "av1_create_decoder: failed to initialize memory allocator\n");
+        return NULL;
+    }
+    
+    // Enable memory override
+    av1_mem_set_override_enabled(true);
+    
+    // Allocate decoder structure
+    Av1Decoder *decoder = (Av1Decoder *)av1_mem_memalign(DEFAULT_ALIGNMENT, sizeof(Av1Decoder));
+    if (!decoder) {
+        fprintf(stderr, "av1_create_decoder: failed to allocate decoder struct\n");
+        av1_mem_set_override_enabled(false);
+        av1_mem_shutdown();
+        return NULL;
+    }
+    
+    // Initialize decoder structure
+    memset(decoder, 0, sizeof(Av1Decoder));
+    decoder->config = *config;
+    decoder->state = AV1_DECODER_STATE_CREATED;
+    decoder->memory_base = config->memory_base;
+    decoder->memory_size = config->memory_size;
+    decoder->mem_allocator_initialized = true;
+    decoder->next_frame_id = 0;
+    
+    // Initialize AOM decoder
+    memset(&decoder->aom_decoder, 0, sizeof(decoder->aom_decoder));
+    
+    // Configure AOM decoder
+    aom_codec_dec_cfg_t aom_config = {
+        .threads = config->num_worker_threads > 0 ? config->num_worker_threads : 1,
+        .width = 0,  // Will be set from stream
+        .height = 0,
+        .alloc_buf = NULL,
+        .alloc_buf_size = 0,
+        .init_flags = 0
+    };
+    
+    // Set threading flags
+    if (config->enable_threading) {
+        aom_config.init_flags |= AOM_CODEC_USE_THREADS;
+    }
+    
+    // Initialize AOM decoder
+    aom_codec_err_t aom_err = aom_codec_init(&av1_codec_algo, &aom_config, &decoder->aom_decoder);
+    if (aom_err != AOM_CODEC_OK) {
+        fprintf(stderr, "av1_create_decoder: failed to initialize AOM decoder: %s\n",
+                aom_codec_error(&decoder->aom_decoder));
+        goto cleanup_decoder;
+    }
+    
+    decoder->aom_decoder_initialized = true;
+    
+    // Initialize mutex and condition variable
+    if (pthread_mutex_init(&decoder->decoder_mutex, NULL) != 0) {
+        fprintf(stderr, "av1_create_decoder: failed to init mutex\n");
+        goto cleanup_aom;
+    }
+    
+    if (pthread_cond_init(&decoder->decoder_cond, NULL) != 0) {
+        fprintf(stderr, "av1_create_decoder: failed to init cond\n");
+        pthread_mutex_destroy(&decoder->decoder_mutex);
+        goto cleanup_aom;
+    }
+    
+    // Allocate queue storage (two queues: ready and output)
+    int queue_capacity = config->queue_depth + 4;  // Extra for safety
+    decoder->queue_storage_size = queue_capacity * sizeof(Av1FrameEntry) * 2;
+    decoder->queue_storage = (Av1FrameEntry *)av1_mem_memalign(DEFAULT_ALIGNMENT, 
+                                                                 decoder->queue_storage_size);
+    if (!decoder->queue_storage) {
+        fprintf(stderr, "av1_create_decoder: failed to allocate queue storage\n");
+        goto cleanup_sync;
+    }
+    
+    // Initialize ready queue
+    if (av1_frame_queue_init(&decoder->ready_queue, decoder->queue_storage, 
+                              queue_capacity) != 0) {
+        fprintf(stderr, "av1_create_decoder: failed to init ready queue\n");
+        goto cleanup_queue_storage;
+    }
+    
+    // Initialize output queue
+    Av1FrameEntry *output_storage = decoder->queue_storage + queue_capacity;
+    if (av1_frame_queue_init(&decoder->output_queue, output_storage, 
+                              queue_capacity) != 0) {
+        fprintf(stderr, "av1_create_decoder: failed to init output queue\n");
+        goto cleanup_ready_queue;
+    }
+    
+    // Allocate and create worker threads
+    int num_workers = config->num_worker_threads > 0 ? config->num_worker_threads : 4;
+    decoder->num_workers = num_workers;
+    
+    if (num_workers > 0) {
+        decoder->workers = (Av1WorkerThread *)av1_mem_calloc(num_workers, sizeof(Av1WorkerThread));
+        if (!decoder->workers) {
+            fprintf(stderr, "av1_create_decoder: failed to allocate workers\n");
+            goto cleanup_output_queue;
+        }
+        
+        for (int i = 0; i < num_workers; i++) {
+            decoder->workers[i].thread_id = i;
+            decoder->workers[i].config = config->worker_config;
+            decoder->workers[i].running = false;
+            
+            if (pthread_create(&decoder->workers[i].thread, NULL, 
+                               worker_thread_func, &decoder->workers[i]) != 0) {
+                fprintf(stderr, "av1_create_decoder: failed to create worker %d\n", i);
+                // Clean up created workers
+                for (int j = 0; j < i; j++) {
+                    pthread_cancel(decoder->workers[j].thread);
+                    pthread_join(decoder->workers[j].thread, NULL);
+                }
+                av1_mem_free(decoder->workers);
+                decoder->workers = NULL;
+                goto cleanup_output_queue;
+            }
+        }
+    }
+    
+    // Create copy thread
+    decoder->copy_thread = (Av1CopyThread *)av1_mem_calloc(1, sizeof(Av1CopyThread));
+    if (!decoder->copy_thread) {
+        fprintf(stderr, "av1_create_decoder: failed to allocate copy thread\n");
+        goto cleanup_workers;
+    }
+    
+    decoder->copy_thread->config = config->copy_thread_config;
+    decoder->copy_thread->input_queue = &decoder->ready_queue;
+    decoder->copy_thread->output_queue = &decoder->output_queue;
+    decoder->copy_thread->running = false;
+    
+    if (pthread_create(&decoder->copy_thread->thread, NULL, 
+                       copy_thread_func, decoder->copy_thread) != 0) {
+        fprintf(stderr, "av1_create_decoder: failed to create copy thread\n");
+        av1_mem_free(decoder->copy_thread);
+        decoder->copy_thread = NULL;
+        goto cleanup_workers;
+    }
+    
+    // Optionally create GPU thread
+    if (config->use_gpu) {
+        decoder->gpu_thread = (Av1GPUThread *)av1_mem_calloc(1, sizeof(Av1GPUThread));
+        if (!decoder->gpu_thread) {
+            fprintf(stderr, "av1_create_decoder: failed to allocate GPU thread\n");
+            // Not fatal - continue without GPU thread
+        } else {
+            decoder->gpu_thread->config = config->gpu_thread_config;
+            decoder->gpu_thread->gpu_device = config->gpu_device;
+            decoder->gpu_thread->running = false;
+            decoder->has_gpu_thread = true;
+            
+            if (pthread_create(&decoder->gpu_thread->thread, NULL, 
+                               gpu_thread_func, decoder->gpu_thread) != 0) {
+                fprintf(stderr, "av1_create_decoder: failed to create GPU thread\n");
+                av1_mem_free(decoder->gpu_thread);
+                decoder->gpu_thread = NULL;
+                decoder->has_gpu_thread = false;
+            }
+        }
+    }
+    
+    // Initialize statistics
+    decoder->frames_decoded = 0;
+    decoder->frames_output = 0;
+    decoder->decode_errors = 0;
+    
+    // Set state to READY
+    decoder->state = AV1_DECODER_STATE_READY;
+    
+    printf("Decoder created successfully:\n");
+    printf("  Queue depth: %d\n", config->queue_depth);
+    printf("  Workers: %d\n", num_workers);
+    printf("  GPU: %s\n", config->use_gpu ? "enabled" : "disabled");
+    
+    return decoder;
+
+cleanup_workers:
+    if (decoder->workers) {
+        for (int i = 0; i < decoder->num_workers; i++) {
+            if (decoder->workers[i].running) {
+                pthread_cancel(decoder->workers[i].thread);
+            }
+            pthread_join(decoder->workers[i].thread, NULL);
+        }
+        av1_mem_free(decoder->workers);
+    }
+
+cleanup_output_queue:
+    av1_frame_queue_destroy(&decoder->output_queue);
+
+cleanup_ready_queue:
+    av1_frame_queue_destroy(&decoder->ready_queue);
+
+cleanup_queue_storage:
+    if (decoder->queue_storage) {
+        av1_mem_free(decoder->queue_storage);
+    }
+
+cleanup_sync:
+    pthread_cond_destroy(&decoder->decoder_cond);
+    pthread_mutex_destroy(&decoder->decoder_mutex);
+
+cleanup_aom:
+    if (decoder->aom_decoder_initialized) {
+        aom_codec_destroy(&decoder->aom_decoder);
+    }
+
+cleanup_decoder:
+    av1_mem_free(decoder);
+    av1_mem_set_override_enabled(false);
+    av1_mem_shutdown();
+    
+    return NULL;
+}
+
+int av1_destroy_decoder(Av1Decoder *decoder) {
+    if (!decoder) {
+        return -1;
+    }
+    
+    // Set state to indicate shutdown
+    decoder->state = AV1_DECODER_STATE_UNINITIALIZED;
+    
+    // Stop and join worker threads
+    if (decoder->workers) {
+        for (int i = 0; i < decoder->num_workers; i++) {
+            if (decoder->workers[i].running) {
+                pthread_cancel(decoder->workers[i].thread);
+            }
+            pthread_join(decoder->workers[i].thread, NULL);
+        }
+        av1_mem_free(decoder->workers);
+        decoder->workers = NULL;
+    }
+    
+    // Stop and join copy thread
+    if (decoder->copy_thread) {
+        if (decoder->copy_thread->running) {
+            pthread_cancel(decoder->copy_thread->thread);
+        }
+        pthread_join(decoder->copy_thread->thread, NULL);
+        av1_mem_free(decoder->copy_thread);
+        decoder->copy_thread = NULL;
+    }
+    
+    // Stop and join GPU thread
+    if (decoder->gpu_thread) {
+        if (decoder->gpu_thread->running) {
+            pthread_cancel(decoder->gpu_thread->thread);
+        }
+        pthread_join(decoder->gpu_thread->thread, NULL);
+        av1_mem_free(decoder->gpu_thread);
+        decoder->gpu_thread = NULL;
+    }
+    
+    // Destroy queues
+    av1_frame_queue_destroy(&decoder->output_queue);
+    av1_frame_queue_destroy(&decoder->ready_queue);
+    
+    // Free queue storage
+    if (decoder->queue_storage) {
+        av1_mem_free(decoder->queue_storage);
+    }
+    
+    // Destroy synchronization primitives
+    pthread_cond_destroy(&decoder->decoder_cond);
+    pthread_mutex_destroy(&decoder->decoder_mutex);
+    
+    // Destroy AOM decoder
+    if (decoder->aom_decoder_initialized) {
+        aom_codec_destroy(&decoder->aom_decoder);
+        decoder->aom_decoder_initialized = false;
+    }
+    
+    // Free decoder structure
+    av1_mem_free(decoder);
+    
+    // Shutdown memory allocator
+    av1_mem_set_override_enabled(false);
+    av1_mem_shutdown();
+    
+    return 0;
+}
+
+Av1DecoderState av1_get_decoder_state(const Av1Decoder *decoder) {
+    if (!decoder) {
+        return AV1_DECODER_STATE_UNINITIALIZED;
+    }
+    return decoder->state;
+}
+
+const Av1DecoderConfig *av1_get_decoder_config(const Av1Decoder *decoder) {
+    if (!decoder) {
+        return NULL;
+    }
+    return &decoder->config;
+}
+
+Av1MemStats av1_get_mem_stats(const Av1Decoder *decoder) {
+    Av1MemStats zero_stats = {0};
+    if (!decoder) {
+        return zero_stats;
+    }
+    return av1_mem_get_stats();
+}
+
+void av1_reset_mem_stats(Av1Decoder *decoder) {
+    if (decoder) {
+        av1_mem_reset_stats();
+    }
+}
+
+// ============================================================================
+// av1_decode Implementation
+// ============================================================================
+
+Av1DecodeResult av1_decode(Av1Decoder *decoder, 
+                           const uint8_t *data, 
+                           size_t data_size,
+                           Av1DecodeOutput *out_result) {
+    // Step 1: Validate decoder and state
+    if (!decoder) {
+        fprintf(stderr, "av1_decode: NULL decoder\n");
+        return AV1_INVALID_PARAM;
+    }
+    
+    if (!data || data_size == 0) {
+        fprintf(stderr, "av1_decode: NULL data or zero size\n");
+        return AV1_INVALID_PARAM;
+    }
+    
+    // Check decoder state - must be CREATED, READY, or DECODING
+    if (decoder->state != AV1_DECODER_STATE_CREATED &&
+        decoder->state != AV1_DECODER_STATE_READY &&
+        decoder->state != AV1_DECODER_STATE_DECODING) {
+        fprintf(stderr, "av1_decode: invalid decoder state %d\n", decoder->state);
+        return AV1_INVALID_PARAM;
+    }
+    
+    // Step 2: Set state to DECODING
+    decoder->state = AV1_DECODER_STATE_DECODING;
+    
+    // Step 3: Check if ready queue is full
+    if (av1_frame_queue_is_full(&decoder->ready_queue)) {
+        fprintf(stderr, "av1_decode: ready queue is full\n");
+        decoder->state = AV1_DECODER_STATE_READY;
+        return AV1_QUEUE_FULL;
+    }
+    
+    // Step 4: Call AOM decode path (synchronous)
+    aom_codec_err_t aom_err = aom_codec_decode(&decoder->aom_decoder, 
+                                                 data, 
+                                                 data_size, 
+                                                 NULL);
+    
+    if (aom_err != AOM_CODEC_OK) {
+        const char *error_msg = aom_codec_error(&decoder->aom_decoder);
+        fprintf(stderr, "av1_decode: AOM decode error: %s\n", error_msg);
+        decoder->decode_errors++;
+        decoder->state = AV1_DECODER_STATE_ERROR;
+        return AV1_ERROR;
+    }
+    
+    // Step 5: Process decoded frame(s)
+    int frame_ready = 0;
+    int show_existing = 0;
+    int dpb_slot = -1;
+    uint32_t frame_id = 0;
+    
+    // Get the decoded frame from AOM
+    aom_image_t *img = aom_codec_get_frame(&decoder->aom_decoder, &decoder->aom_decoder.iter);
+    
+    if (img) {
+        // A frame was decoded - check if it should be displayed
+        // In AV1, frames with show_frame=1 should be displayed
+        // For this implementation, we assume any returned frame is displayable
+        
+        // Check for show_existing_frame - AOM handles this internally
+        // and returns the existing frame if applicable
+        
+        frame_ready = 1;
+        show_existing = 0;  // AOM handles show_existing internally
+        
+        // Assign frame ID
+        frame_id = decoder->next_frame_id++;
+        
+        // For now, use a simple slot assignment
+        // In a full implementation, we'd get the actual DPB slot from AOM
+        dpb_slot = frame_id % 16;  // Simple round-robin
+        
+        // Push to ready queue
+        Av1FrameEntry entry = {
+            .frame_id = frame_id,
+            .dpb_slot = dpb_slot,
+            .show_frame = 1,
+            .show_existing_frame = show_existing
+        };
+        
+        if (av1_frame_queue_push(&decoder->ready_queue, &entry) != 0) {
+            fprintf(stderr, "av1_decode: failed to push to ready queue\n");
+            decoder->state = AV1_DECODER_STATE_READY;
+            return AV1_ERROR;
+        }
+        
+        decoder->frames_decoded++;
+        
+        printf("av1_decode: decoded frame_id=%u, dpb_slot=%d, show=%d\n",
+               frame_id, dpb_slot, entry.show_frame);
+    } else {
+        // No frame output (e.g., frame not yet displayable)
+        frame_ready = 0;
+        printf("av1_decode: no frame output (not yet displayable)\n");
+    }
+    
+    // Step 6: Fill output result
+    if (out_result) {
+        out_result->frame_ready = frame_ready;
+        out_result->frame_id = frame_id;
+        out_result->show_existing_frame = show_existing;
+        out_result->dpb_slot = dpb_slot;
+    }
+    
+    // Set state back to READY
+    decoder->state = AV1_DECODER_STATE_READY;
+    
+    return AV1_OK;
+}
+
+Av1DecodeResult av1_get_decoded_frame(Av1Decoder *decoder, 
+                                       Av1FrameEntry *out_entry,
+                                       uint32_t timeout_us) {
+    if (!decoder || !out_entry) {
+        return AV1_INVALID_PARAM;
+    }
+    
+    // Pop from ready queue
+    int result = av1_frame_queue_pop(&decoder->ready_queue, out_entry, timeout_us);
+    
+    if (result == 0) {
+        decoder->frames_output++;
+        return AV1_OK;
+    }
+    
+    return AV1_ERROR;
+}
+
+Av1DecodeResult av1_release_frame(Av1Decoder *decoder, uint32_t frame_id) {
+    (void)decoder;
+    (void)frame_id;
+    // In a full implementation, this would release the DPB slot
+    // For now, it's a no-op
+    return AV1_OK;
+}
+```
+
+### ivf_parser.h
+```c
+#ifndef IVF_PARSER_H
+#define IVF_PARSER_H
+
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// ============================================================================
+// IVF File Format Structures
+// ============================================================================
+
+// IVF file header (32 bytes)
+typedef struct __attribute__((packed)) IvfHeader {
+    char     magic[4];         // "DKIF"
+    uint16_t version;          // Usually 0
+    uint16_t header_size;      // Usually 32
+    char     fourcc[4];        // FourCC code (e.g., "AV01")
+    uint16_t width;            // Frame width
+    uint16_t height;           // Frame height
+    uint32_t timebase_num;     // Numerator of timebase
+    uint32_t timebase_den;     // Denominator of timebase
+    uint32_t num_frames;       // Number of frames in file
+    uint32_t unused;           // Unused (usually 0)
+} IvfHeader;
+
+// IVF frame header (12 bytes)
+typedef struct __attribute__((packed)) IvfFrameHeader {
+    uint32_t size;             // Size of frame data in bytes
+    uint64_t timestamp;        // Presentation timestamp in timebase units
+} IvfFrameHeader;
+
+// ============================================================================
+// Parser Handle
+// ============================================================================
+
+typedef struct IvfParser IvfParser;
+
+// ============================================================================
+// API Functions
+// ============================================================================
+
+/**
+ * Open an IVF file for reading.
+ * 
+ * @param filename Path to IVF file
+ * @return Parser handle on success, NULL on failure
+ */
+IvfParser *ivf_parser_open(const char *filename);
+
+/**
+ * Close an IVF file and free resources.
+ * 
+ * @param parser Parser handle
+ */
+void ivf_parser_close(IvfParser *parser);
+
+/**
+ * Get the IVF file header information.
+ * 
+ * @param parser Parser handle
+ * @return Pointer to header (valid until parser is closed), or NULL on error
+ */
+const IvfHeader *ivf_parser_get_header(const IvfParser *parser);
+
+/**
+ * Read the next frame from the IVF file.
+ * 
+ * @param parser   Parser handle
+ * @param out_data Output buffer for frame data (caller must free with free())
+ * @param out_size Output size of frame data in bytes
+ * @param out_timestamp Output timestamp in timebase units
+ * @return 0 on success, -1 on end of file or error
+ */
+int ivf_parser_read_frame(IvfParser *parser, 
+                          uint8_t **out_data, 
+                          size_t *out_size,
+                          uint64_t *out_timestamp);
+
+/**
+ * Check if we've reached end of file.
+ * 
+ * @param parser Parser handle
+ * @return true if at EOF, false otherwise
+ */
+bool ivf_parser_eof(const IvfParser *parser);
+
+/**
+ * Get current frame index.
+ * 
+ * @param parser Parser handle
+ * @return Current frame index (0-based), or -1 on error
+ */
+int ivf_parser_get_frame_index(const IvfParser *parser);
+
+/**
+ * Get total number of frames in the file.
+ * 
+ * @param parser Parser handle
+ * @return Number of frames, or -1 on error
+ */
+int ivf_parser_get_num_frames(const IvfParser *parser);
+
+/**
+ * Seek to a specific frame.
+ * 
+ * @param parser Parser handle
+ * @param frame_index Frame index to seek to (0-based)
+ * @return 0 on success, -1 on error
+ */
+int ivf_parser_seek_frame(IvfParser *parser, int frame_index);
+
+/**
+ * Check if the file is a valid IVF file.
+ * 
+ * @param filename Path to file
+ * @return true if valid IVF, false otherwise
+ */
+bool ivf_parser_is_valid(const char *filename);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // IVF_PARSER_H
+```
+
+### ivf_parser.c
+```c
+#include "ivf_parser.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+
+// ============================================================================
+// Internal Structures
+// ============================================================================
+
+struct IvfParser {
+    FILE *file;
+    IvfHeader header;
+    int current_frame;
+    bool eof;
+    bool valid;
+};
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+#define IVF_MAGIC "DKIF"
+#define IVF_VALID_FOURCC "AV01"
+
+// ============================================================================
+// Internal Functions
+// ============================================================================
+
+static void read_header(IvfParser *parser) {
+    if (!parser || !parser->file) {
+        return;
+    }
+    
+    // Seek to beginning
+    fseek(parser->file, 0, SEEK_SET);
+    
+    // Read header
+    size_t read = fread(&parser->header, sizeof(IvfHeader), 1, parser->file);
+    
+    if (read != 1) {
+        parser->valid = false;
+        return;
+    }
+    
+    // Validate magic
+    if (memcmp(parser->header.magic, IVF_MAGIC, 4) != 0) {
+        fprintf(stderr, "Invalid IVF magic: %.4s\n", parser->header.magic);
+        parser->valid = false;
+        return;
+    }
+    
+    // Validate version
+    if (parser->header.version != 0) {
+        fprintf(stderr, "Unsupported IVF version: %d\n", parser->header.version);
+        parser->valid = false;
+        return;
+    }
+    
+    // Validate header size
+    if (parser->header.header_size != 32) {
+        fprintf(stderr, "Unexpected IVF header size: %d\n", parser->header.header_size);
+        parser->valid = false;
+        return;
+    }
+    
+    parser->valid = true;
+    parser->current_frame = 0;
+    parser->eof = false;
+}
+
+// ============================================================================
+// API Implementation
+// ============================================================================
+
+IvfParser *ivf_parser_open(const char *filename) {
+    if (!filename) {
+        fprintf(stderr, "ivf_parser_open: NULL filename\n");
+        return NULL;
+    }
+    
+    // Allocate parser
+    IvfParser *parser = (IvfParser *)calloc(1, sizeof(IvfParser));
+    if (!parser) {
+        fprintf(stderr, "ivf_parser_open: failed to allocate parser\n");
+        return NULL;
+    }
+    
+    // Open file
+    parser->file = fopen(filename, "rb");
+    if (!parser->file) {
+        fprintf(stderr, "ivf_parser_open: failed to open file: %s\n", filename);
+        free(parser);
+        return NULL;
+    }
+    
+    // Read and validate header
+    read_header(parser);
+    
+    if (!parser->valid) {
+        fprintf(stderr, "ivf_parser_open: invalid IVF file: %s\n", filename);
+        fclose(parser->file);
+        free(parser);
+        return NULL;
+    }
+    
+    printf("IVF file opened: %s\n", filename);
+    printf("  Resolution: %dx%d\n", parser->header.width, parser->header.height);
+    printf("  FourCC: %.4s\n", parser->header.fourcc);
+    printf("  Timebase: %u/%u\n", parser->header.timebase_num, parser->header.timebase_den);
+    printf("  Frames: %u\n", parser->header.num_frames);
+    
+    return parser;
+}
+
+void ivf_parser_close(IvfParser *parser) {
+    if (!parser) {
+        return;
+    }
+    
+    if (parser->file) {
+        fclose(parser->file);
+    }
+    
+    free(parser);
+}
+
+const IvfHeader *ivf_parser_get_header(const IvfParser *parser) {
+    if (!parser || !parser->valid) {
+        return NULL;
+    }
+    
+    return &parser->header;
+}
+
+int ivf_parser_read_frame(IvfParser *parser, 
+                          uint8_t **out_data, 
+                          size_t *out_size,
+                          uint64_t *out_timestamp) {
+    if (!parser || !out_data || !out_size) {
+        return -1;
+    }
+    
+    if (!parser->valid || parser->eof) {
+        parser->eof = true;
+        return -1;
+    }
+    
+    // Read frame header
+    IvfFrameHeader frame_header;
+    size_t read = fread(&frame_header, sizeof(IvfFrameHeader), 1, parser->file);
+    
+    if (read != 1) {
+        parser->eof = true;
+        return -1;
+    }
+    
+    // Allocate buffer for frame data
+    uint8_t *data = (uint8_t *)malloc(frame_header.size);
+    if (!data) {
+        fprintf(stderr, "ivf_parser_read_frame: failed to allocate frame buffer\n");
+        return -1;
+    }
+    
+    // Read frame data
+    read = fread(data, 1, frame_header.size, parser->file);
+    
+    if (read != frame_header.size) {
+        fprintf(stderr, "ivf_parser_read_frame: failed to read frame data\n");
+        free(data);
+        return -1;
+    }
+    
+    // Output results
+    *out_data = data;
+    *out_size = frame_header.size;
+    
+    if (out_timestamp) {
+        *out_timestamp = frame_header.timestamp;
+    }
+    
+    parser->current_frame++;
+    
+    // Check for EOF
+    if (feof(parser->file)) {
+        parser->eof = true;
+    }
+    
+    return 0;
+}
+
+bool ivf_parser_eof(const IvfParser *parser) {
+    if (!parser) {
+        return true;
+    }
+    return parser->eof;
+}
+
+int ivf_parser_get_frame_index(const IvfParser *parser) {
+    if (!parser) {
+        return -1;
+    }
+    return parser->current_frame;
+}
+
+int ivf_parser_get_num_frames(const IvfParser *parser) {
+    if (!parser || !parser->valid) {
+        return -1;
+    }
+    return (int)parser->header.num_frames;
+}
+
+int ivf_parser_seek_frame(IvfParser *parser, int frame_index) {
+    if (!parser || !parser->valid) {
+        return -1;
+    }
+    
+    if (frame_index < 0 || frame_index >= (int)parser->header.num_frames) {
+        fprintf(stderr, "ivf_parser_seek_frame: invalid frame index %d\n", frame_index);
+        return -1;
+    }
+    
+    // Seek to start of file
+    fseek(parser->file, sizeof(IvfHeader), SEEK_SET);
+    
+    // Skip frames
+    for (int i = 0; i < frame_index; i++) {
+        IvfFrameHeader frame_header;
+        if (fread(&frame_header, sizeof(IvfFrameHeader), 1, parser->file) != 1) {
+            return -1;
+        }
+        fseek(parser->file, frame_header.size, SEEK_CUR);
+    }
+    
+    parser->current_frame = frame_index;
+    parser->eof = false;
+    
+    return 0;
+}
+
+bool ivf_parser_is_valid(const char *filename) {
+    if (!filename) {
+        return false;
+    }
+    
+    FILE *file = fopen(filename, "rb");
+    if (!file) {
+        return false;
+    }
+    
+    char magic[4];
+    size_t read = fread(magic, 1, 4, file);
+    fclose(file);
+    
+    if (read != 4) {
+        return false;
+    }
+    
+    return memcmp(magic, IVF_MAGIC, 4) == 0;
+}
+```
+
+### test_av1_decode.c
+```c
+#include "av1_decoder_api.h"
+#include "av1_mem_override.h"
+#include "ivf_parser.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <stdint.h>
+
+// Test configuration
+#define TEST_WIDTH      1920
+#define TEST_HEIGHT     1080
+#define TEST_QUEUE_DEPTH 4
+#define TEST_WORKERS    1  // Use single thread for decode test
+
+static void print_separator(void) {
+    printf("============================================================\n");
+}
+
+static void test_ivf_parser(const char *filename) {
+    print_separator();
+    printf("TEST: IVF Parser - %s\n", filename);
+    print_separator();
+    
+    // Check if file is valid IVF
+    if (!ivf_parser_is_valid(filename)) {
+        printf("File is not a valid IVF file: %s\n", filename);
+        return;
+    }
+    
+    // Open parser
+    IvfParser *parser = ivf_parser_open(filename);
+    if (!parser) {
+        printf("Failed to open IVF file\n");
+        return;
+    }
+    
+    // Get header
+    const IvfHeader *header = ivf_parser_get_header(parser);
+    if (header) {
+        printf("\nIVF Header:\n");
+        printf("  Resolution: %dx%d\n", header->width, header->height);
+        printf("  FourCC: %.4s\n", header->fourcc);
+        printf("  Timebase: %u/%u\n", header->timebase_num, header->timebase_den);
+        printf("  Frames: %u\n", header->num_frames);
+    }
+    
+    // Read first few frames
+    printf("\nReading frames:\n");
+    int frame_count = 0;
+    const int max_frames_to_read = 10;
+    
+    while (!ivf_parser_eof(parser) && frame_count < max_frames_to_read) {
+        uint8_t *data = NULL;
+        size_t size = 0;
+        uint64_t timestamp = 0;
+        
+        int result = ivf_parser_read_frame(parser, &data, &size, &timestamp);
+        if (result == 0 && data) {
+            printf("  Frame %d: size=%zu, timestamp=%lu\n", 
+                   frame_count, size, (unsigned long)timestamp);
+            free(data);
+            frame_count++;
+        } else {
+            break;
+        }
+    }
+    
+    printf("  (Read %d frames, file has %d total)\n", 
+           frame_count, ivf_parser_get_num_frames(parser));
+    
+    ivf_parser_close(parser);
+}
+
+static void test_decode_file(const char *filename) {
+    print_separator();
+    printf("TEST: av1_decode - %s\n", filename);
+    print_separator();
+    
+    // First, query memory requirements
+    Av1StreamInfo info = {
+        .width = TEST_WIDTH,
+        .height = TEST_HEIGHT,
+        .max_bitrate = 10,
+        .chroma_subsampling = 0,
+        .is_16bit = false
+    };
+    
+    Av1MemoryRequirements req = av1_query_memory(&info, TEST_QUEUE_DEPTH, TEST_WORKERS);
+    printf("\nMemory required: %zu bytes (%.2f MB)\n", 
+           req.total_size, req.total_size / (1024.0 * 1024.0));
+    
+    // Allocate memory block
+    void *mem_block = aligned_alloc(req.alignment, req.total_size);
+    if (!mem_block) {
+        fprintf(stderr, "Failed to allocate memory block\n");
+        return;
+    }
+    memset(mem_block, 0, req.total_size);
+    
+    // Create decoder configuration
+    Av1DecoderConfig config = {
+        .memory_base = mem_block,
+        .memory_size = req.total_size,
+        .queue_depth = TEST_QUEUE_DEPTH,
+        .num_worker_threads = TEST_WORKERS,
+        .worker_config = { .priority = 0, .cpu_affinity = -1, .core_id = -1 },
+        .copy_thread_config = { .priority = 0, .cpu_affinity = -1, .core_id = -1 },
+        .use_gpu = false,
+        .gpu_device = 0,
+        .gpu_thread_config = { .priority = 0, .cpu_affinity = -1, .core_id = -1 },
+        .enable_threading = false,  // Single-threaded for this test
+        .enable_frame_parallel = false,
+        .max_tile_cols = 0,
+        .max_tile_rows = 0
+    };
+    
+    // Create decoder
+    printf("\nCreating decoder...\n");
+    Av1Decoder *decoder = av1_create_decoder(&config);
+    if (!decoder) {
+        fprintf(stderr, "Failed to create decoder\n");
+        free(mem_block);
+        return;
+    }
+    
+    printf("Decoder created successfully!\n");
+    
+    // Open IVF file
+    IvfParser *parser = ivf_parser_open(filename);
+    if (!parser) {
+        fprintf(stderr, "Failed to open IVF file: %s\n", filename);
+        av1_destroy_decoder(decoder);
+        free(mem_block);
+        return;
+    }
+    
+    const IvfHeader *header = ivf_parser_get_header(parser);
+    printf("Decoding %u frames from %s (%dx%d)...\n",
+           header->num_frames, filename, header->width, header->height);
+    
+    // Decode all frames
+    printf("\n--- Decoding Frames ---\n");
+    
+    int frames_decoded = 0;
+    int frames_with_output = 0;
+    int queue_full_count = 0;
+    
+    while (!ivf_parser_eof(parser)) {
+        uint8_t *data = NULL;
+        size_t size = 0;
+        uint64_t timestamp = 0;
+        
+        int result = ivf_parser_read_frame(parser, &data, &size, &timestamp);
+        if (result != 0 || !data) {
+            break;
+        }
+        
+        // Decode the frame
+        Av1DecodeOutput output;
+        Av1DecodeResult decode_result = av1_decode(decoder, data, size, &output);
+        
+        if (decode_result == AV1_OK) {
+            frames_decoded++;
+            if (output.frame_ready) {
+                frames_with_output++;
+                printf("  Frame %d: frame_id=%u, ready=%d, show_existing=%d, dpb_slot=%d\n",
+                       frames_decoded, output.frame_id, output.frame_ready,
+                       output.show_existing_frame, output.dpb_slot);
+            } else {
+                printf("  Frame %d: decoded (not yet displayable)\n", frames_decoded);
+            }
+        } else if (decode_result == AV1_QUEUE_FULL) {
+            queue_full_count++;
+            printf("  Frame %d: QUEUE_FULL (ready queue is full)\n", frames_decoded + 1);
+        } else {
+            printf("  Frame %d: ERROR (code %d)\n", frames_decoded + 1, decode_result);
+        }
+        
+        free(data);
+        
+        // Test queue full condition after queue_depth+1 frames
+        if (frames_decoded == TEST_QUEUE_DEPTH + 1 && queue_full_count == 0) {
+            printf("\n  NOTE: Queue depth is %d, but no QUEUE_FULL yet.\n", TEST_QUEUE_DEPTH);
+            printf("  This is expected if frames are being consumed via av1_get_decoded_frame().\n");
+        }
+    }
+    
+    printf("\n--- Decode Summary ---\n");
+    printf("Total frames decoded: %d\n", frames_decoded);
+    printf("Frames with output:   %d\n", frames_with_output);
+    printf("Queue full events:    %d\n", queue_full_count);
+    
+    // Test getting frames from queue
+    printf("\n--- Getting Frames from Ready Queue ---\n");
+    
+    int frames_retrieved = 0;
+    Av1FrameEntry entry;
+    
+    while (av1_get_decoded_frame(decoder, &entry, 0) == AV1_OK) {
+        printf("  Retrieved: frame_id=%u, dpb_slot=%d, show=%d, show_existing=%d\n",
+               entry.frame_id, entry.dpbslot, entry.show_frame, entry.show_existing_frame);
+        
+        // Release the frame
+        av1_release_frame(decoder, entry.frame_id);
+        frames_retrieved++;
+    }
+    
+    printf("Frames retrieved from queue: %d\n", frames_retrieved);
+    
+    // Check queue status
+    int queue_count = av1_frame_queue_count(&decoder->ready_queue);
+    printf("Ready queue count after retrieval: %d\n", queue_count);
+    
+    // Test queue full by decoding without consuming
+    printf("\n--- Testing QUEUE_FULL Condition ---\n");
+    
+    // Seek back to beginning
+    ivf_parser_seek_frame(parser, 0);
+    
+    // Decode queue_depth+1 frames without consuming
+    int frames_before_full = 0;
+    for (int i = 0; i < TEST_QUEUE_DEPTH + 2; i++) {
+        uint8_t *data = NULL;
+        size_t size = 0;
+        
+        int result = ivf_parser_read_frame(parser, &data, &size, NULL);
+        if (result != 0 || !data) {
+            break;
+        }
+        
+        Av1DecodeOutput output;
+        Av1DecodeResult decode_result = av1_decode(decoder, data, size, &output);
+        
+        if (decode_result == AV1_QUEUE_FULL) {
+            printf("  Queue became full after %d frames\n", frames_before_full);
+            break;
+        } else if (decode_result == AV1_OK && output.frame_ready) {
+            frames_before_full++;
+        }
+        
+        free(data);
+    }
+    
+    // Consume all frames to drain the queue
+    printf("\n--- Draining Queue ---\n");
+    int drained = 0;
+    while (av1_get_decoded_frame(decoder, &entry, 0) == AV1_OK) {
+        av1_release_frame(decoder, entry.frame_id);
+        drained++;
+    }
+    printf("Drained %d frames from queue\n", drained);
+    
+    // Get memory stats
+    printf("\n--- Memory Statistics ---\n");
+    Av1MemStats stats = av1_get_mem_stats(decoder);
+    printf("  Total size:      %zu bytes (%.2f MB)\n", 
+           stats.total_size, stats.total_size / (1024.0 * 1024.0));
+    printf("  Used size:       %zu bytes (%.2f MB)\n", 
+           stats.used_size, stats.used_size / (1024.0 * 1024.0));
+    printf("  Peak usage:      %zu bytes (%.2f MB)\n", 
+           stats.peak_usage, stats.peak_usage / (1024.0 * 1024.0));
+    printf("  Allocations:     %zu\n", stats.num_allocations);
+    printf("  Frees:           %zu\n", stats.num_frees);
+    
+    // Cleanup
+    ivf_parser_close(parser);
+    av1_destroy_decoder(decoder);
+    free(mem_block);
+    
+    printf("\nDecode test completed!\n");
+}
+
+static void test_error_handling(void) {
+    print_separator();
+    printf("TEST: Error Handling\n");
+    print_separator();
+    
+    // Query memory
+    Av1StreamInfo info = {
+        .width = 640,
+        .height = 480,
+        .max_bitrate = 8,
+        .chroma_subsampling = 0,
+        .is_16bit = false
+    };
+    
+    Av1MemoryRequirements req = av1_query_memory(&info, 2, 1);
+    
+    void *mem = aligned_alloc(req.alignment, req.total_size);
+    if (!mem) {
+        printf("  Skipping error handling tests (memory allocation failed)\n");
+        return;
+    }
+    memset(mem, 0, req.total_size);
+    
+    // Test 1: NULL decoder
+    printf("\nTest 1: av1_decode with NULL decoder\n");
+    uint8_t dummy_data[10] = {0};
+    Av1DecodeOutput output;
+    Av1DecodeResult result = av1_decode(NULL, dummy_data, sizeof(dummy_data), &output);
+    if (result == AV1_INVALID_PARAM) {
+        printf("  PASS: Correctly returned AV1_INVALID_PARAM\n");
+    } else {
+        printf("  FAIL: Expected AV1_INVALID_PARAM, got %d\n", result);
+    }
+    
+    // Test 2: NULL data
+    printf("\nTest 2: av1_decode with NULL data\n");
+    Av1DecoderConfig config = {
+        .memory_base = mem,
+        .memory_size = req.total_size,
+        .queue_depth = 2,
+        .num_worker_threads = 1,
+        .enable_threading = false
+    };
+    
+    Av1Decoder *decoder = av1_create_decoder(&config);
+    if (decoder) {
+        result = av1_decode(decoder, NULL, 10, &output);
+        if (result == AV1_INVALID_PARAM) {
+            printf("  PASS: Correctly returned AV1_INVALID_PARAM\n");
+        } else {
+            printf("  FAIL: Expected AV1_INVALID_PARAM, got %d\n", result);
+        }
+        
+        // Test 3: Zero size
+        printf("\nTest 3: av1_decode with zero size\n");
+        result = av1_decode(decoder, dummy_data, 0, &output);
+        if (result == AV1_INVALID_PARAM) {
+            printf("  PASS: Correctly returned AV1_INVALID_PARAM\n");
+        } else {
+            printf("  FAIL: Expected AV1_INVALID_PARAM, got %d\n", result);
+        }
+        
+        // Test 4: Get state of NULL decoder
+        printf("\nTest 4: av1_get_decoder_state with NULL\n");
+        Av1DecoderState state = av1_get_decoder_state(NULL);
+        if (state == AV1_DECODER_STATE_UNINITIALIZED) {
+            printf("  PASS: Correctly returned UNINITIALIZED\n");
+        } else {
+            printf("  FAIL: Expected UNINITIALIZED, got %d\n", state);
+        }
+        
+        // Test 5: Get decoded frame from empty queue
+        printf("\nTest 5: av1_get_decoded_frame from empty queue\n");
+        Av1FrameEntry entry;
+        result = av1_get_decoded_frame(decoder, &entry, 0);  // Non-blocking
+        if (result != AV1_OK) {
+            printf("  PASS: Correctly returned error for empty queue\n");
+        } else {
+            printf("  FAIL: Should have returned error\n");
+        }
+        
+        av1_destroy_decoder(decoder);
+    }
+    
+    free(mem);
+    printf("\nError handling tests completed!\n");
+}
+
+int main(int argc, char *argv[]) {
+    printf("=== AV1 Decode Tests ===\n\n");
+    
+    // Default test file (can be overridden by command line)
+    const char *test_file = "test.ivf";
+    
+    if (argc > 1) {
+        test_file = argv[1];
+    }
+    
+    // Test IVF parser first (just to verify file format)
+    test_ivf_parser(test_file);
+    
+    // Test decode functionality
+    test_decode_file(test_file);
+    
+    // Test error handling
+    test_error_handling();
+    
+    print_separator();
+    printf("All tests completed!\n");
+    print_separator();
+    
+    return 0;
+}
+```

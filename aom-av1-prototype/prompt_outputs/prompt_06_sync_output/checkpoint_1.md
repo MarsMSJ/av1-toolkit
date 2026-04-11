@@ -1,6 +1,6 @@
 
 
-I'll implement the cleanup functions (av1_flush and enhanced av1_destroy_decoder) and create the test file.
+I'll implement the output retrieval pipeline with the pending output table, sync/set_output/receive_output functions, and the Y4M writer helper.
 
 ### av1_decoder_api.h
 ```c
@@ -101,8 +101,7 @@ typedef enum {
     AV1_QUEUE_FULL = -2,
     AV1_INVALID_PARAM = -3,
     AV1_NEED_MORE_DATA = -4,
-    AV1_END_OF_STREAM = -5,
-    AV1_FLUSHED = -6           // Decoder is flushed, no more frames
+    AV1_END_OF_STREAM = -5
 } Av1DecodeResult;
 
 // ============================================================================
@@ -179,30 +178,10 @@ Av1MemoryRequirements av1_query_memory(const Av1StreamInfo *info,
 Av1Decoder *av1_create_decoder(const Av1DecoderConfig *config);
 
 /**
- * Flush the decoder and signal end of stream.
- * 
- * After calling this, the decoder enters FLUSHING state and will reject
- * any subsequent av1_decode() calls. The app should drain remaining frames
- * via av1_sync() until it returns AV1_END_OF_STREAM.
- * 
- * @param decoder Decoder handle
- * @return AV1_OK on success, AV1_INVALID_PARAM if decoder is NULL
- */
-Av1DecodeResult av1_flush(Av1Decoder *decoder);
-
-/**
  * Destroy a decoder instance and release all resources.
  * 
- * This function performs a complete cleanup:
- * - If not already flushed, implicitly flushes and discards pending frames
- * - Waits for any in-progress copy operations to complete
- * - Signals and joins all worker threads (copy, worker, GPU)
- * - Destroys the AOM codec context
- * - Destroys synchronization primitives
- * - Clears the memory pool flag
- * 
  * @param decoder Decoder handle to destroy
- * @return 0 on success, -1 on error (NULL decoder)
+ * @return 0 on success, -1 on error
  */
 int av1_destroy_decoder(Av1Decoder *decoder);
 
@@ -249,8 +228,7 @@ void av1_reset_mem_stats(Av1Decoder *decoder);
  * @param data_size  Size of data in bytes
  * @param out_result Output structure filled with frame info (can be NULL)
  * @return AV1_OK on success, AV1_ERROR on error, AV1_QUEUE_FULL if ready
- *         queue is full, AV1_INVALID_PARAM if decoder state is invalid,
- *         AV1_FLUSHED if decoder has been flushed
+ *         queue is full, AV1_INVALID_PARAM if decoder state is invalid
  */
 Av1DecodeResult av1_decode(Av1Decoder *decoder, 
                            const uint8_t *data, 
@@ -258,7 +236,11 @@ Av1DecodeResult av1_decode(Av1Decoder *decoder,
                            Av1DecodeOutput *out_result);
 
 /**
- * Signal end of stream to the decoder (legacy, use av1_flush instead).
+ * Signal end of stream to the decoder.
+ * 
+ * After calling this, the decoder will enter FLUSHING state and will
+ * return AV1_END_OF_STREAM from av1_sync() when all frames have been
+ * output.
  * 
  * @param decoder Decoder handle
  * @return AV1_OK on success
@@ -464,9 +446,6 @@ struct Av1Decoder {
     // Thread safety
     pthread_mutex_t decoder_mutex;
     pthread_cond_t decoder_cond;
-    
-    // Destroy tracking
-    int destroyed;  // 1 if destroy has been called
 };
 
 // ============================================================================
@@ -646,36 +625,6 @@ static void remove_pending_output(Av1Decoder *decoder, uint32_t frame_id) {
     }
 }
 
-// Clear all pending output entries (for destroy)
-static void clear_all_pending_output(Av1Decoder *decoder) {
-    for (int i = 0; i < MAX_PENDING_OUTPUT; i++) {
-        if (decoder->pending_output[i].valid) {
-            // Release DPB slot
-            if (decoder->pending_output[i].dpb_slot >= 0) {
-                release_dpb_slot(decoder, decoder->pending_output[i].dpb_slot);
-            }
-            // Free copy job if exists
-            if (decoder->pending_output[i].copy_job) {
-                free(decoder->pending_output[i].copy_job);
-            }
-            decoder->pending_output[i].valid = 0;
-            decoder->pending_output[i].copy_job = NULL;
-        }
-    }
-    decoder->pending_output_count = 0;
-}
-
-// Drain ready queue (discard all frames)
-static void drain_ready_queue(Av1Decoder *decoder) {
-    Av1FrameEntry entry;
-    while (av1_frame_queue_pop(&decoder->ready_queue, &entry, 0) == 0) {
-        // Release DPB slot
-        if (entry.dpb_slot >= 0) {
-            release_dpb_slot(decoder, entry.dpb_slot);
-        }
-    }
-}
-
 // ============================================================================
 // Worker Thread Implementation (Stub)
 // ============================================================================
@@ -849,7 +798,6 @@ Av1Decoder *av1_create_decoder(const Av1DecoderConfig *config) {
     decoder->next_frame_id = 0;
     decoder->pending_output_count = 0;
     decoder->dpb_count = 16;
-    decoder->destroyed = 0;
     
     // Initialize DPB
     memset(decoder->dpb, 0, sizeof(decoder->dpb));
@@ -1027,126 +975,16 @@ cleanup_decoder:
     return NULL;
 }
 
-// ============================================================================
-// av1_flush Implementation
-// ============================================================================
-
-Av1DecodeResult av1_flush(Av1Decoder *decoder) {
-    if (!decoder) {
-        fprintf(stderr, "av1_flush: NULL decoder\n");
-        return AV1_INVALID_PARAM;
-    }
-    
-    // Check if already flushed/destroyed
-    if (decoder->state == AV1_DECODER_STATE_FLUSHING ||
-        decoder->state == AV1_DECODER_STATE_UNINITIALIZED ||
-        decoder->destroyed) {
-        // Already flushed or being destroyed
-        return AV1_OK;
-    }
-    
-    // Set state to FLUSHING
-    decoder->state = AV1_DECODER_STATE_FLUSHING;
-    
-    // Flush AOM decoder to get remaining frames
-    aom_codec_err_t aom_err = aom_codec_decode(&decoder->aom_decoder, NULL, 0, NULL);
-    if (aom_err != AOM_CODEC_OK) {
-        // Ignore flush errors
-    }
-    
-    // Try to get any remaining frames from AOM
-    aom_image_t *img;
-    while ((img = aom_codec_get_frame(&decoder->aom_decoder, &decoder->aom_decoder.iter)) != NULL) {
-        uint32_t frame_id = decoder->next_frame_id++;
-        int dpb_slot = allocate_dpb_slot(decoder, img->w, img->h, img->bit_depth);
-        
-        if (dpb_slot >= 0) {
-            Av1FrameEntry entry = {
-                .frame_id = frame_id,
-                .dpb_slot = dpb_slot,
-                .show_frame = 1,
-                .show_existing_frame = 0
-            };
-            av1_frame_queue_push(&decoder->ready_queue, &entry);
-            decoder->frames_decoded++;
-        }
-    }
-    
-    printf("av1_flush: decoder flushed, ready queue has %d frames\n",
-           av1_frame_queue_count(&decoder->ready_queue));
-    
-    return AV1_OK;
-}
-
-// ============================================================================
-// av1_destroy_decoder Implementation
-// ============================================================================
-
 int av1_destroy_decoder(Av1Decoder *decoder) {
     if (!decoder) {
-        fprintf(stderr, "av1_destroy_decoder: NULL decoder\n");
         return -1;
     }
     
-    // Check for double-destroy
-    if (decoder->destroyed) {
-        fprintf(stderr, "av1_destroy_decoder: decoder already destroyed\n");
-        return -1;
-    }
+    // Set state to indicate shutdown
+    decoder->state = AV1_DECODER_STATE_UNINITIALIZED;
     
-    // Mark as destroyed to prevent further operations
-    decoder->destroyed = 1;
-    
-    // Step 1: If not flushed, flush and drain
-    if (decoder->state != AV1_DECODER_STATE_FLUSHING &&
-        decoder->state != AV1_DECODER_STATE_UNINITIALIZED) {
-        
-        printf("av1_destroy_decoder: implicit flush before destroy\n");
-        
-        // Flush AOM to get any remaining frames
-        aom_codec_decode(&decoder->aom_decoder, NULL, 0, NULL);
-        
-        // Drain ready queue (discard frames)
-        drain_ready_queue(decoder);
-        
-        // Clear pending output table
-        clear_all_pending_output(decoder);
-        
-        // Set state to flushing
-        decoder->state = AV1_DECODER_STATE_FLUSHING;
-    }
-    
-    // Step 2: Wait for any in-progress copy operations
-    // Check pending output for any copy jobs in progress
-    for (int i = 0; i < MAX_PENDING_OUTPUT; i++) {
-        if (decoder->pending_output[i].valid && 
-            decoder->pending_output[i].copy_job != NULL) {
-            
-            // Wait for copy to complete
-            int status = av1_copy_thread_get_status(decoder->pending_output[i].copy_job);
-            if (status == AV1_COPY_IN_PROGRESS) {
-                printf("av1_destroy_decoder: waiting for in-progress copy job\n");
-                av1_copy_thread_wait(decoder->copy_thread, 
-                                     decoder->pending_output[i].copy_job, 
-                                     5000000);  // 5 second timeout
-            }
-            
-            // Free copy job
-            free(decoder->pending_output[i].copy_job);
-            decoder->pending_output[i].copy_job = NULL;
-        }
-    }
-    
-    // Step 3: Signal and join copy thread
-    if (decoder->copy_thread) {
-        printf("av1_destroy_decoder: stopping copy thread\n");
-        av1_copy_thread_destroy(decoder->copy_thread);
-        decoder->copy_thread = NULL;
-    }
-    
-    // Step 4: Signal and join worker threads
+    // Stop and join worker threads
     if (decoder->workers) {
-        printf("av1_destroy_decoder: stopping worker threads\n");
         for (int i = 0; i < decoder->num_workers; i++) {
             if (decoder->workers[i].running) {
                 pthread_cancel(decoder->workers[i].thread);
@@ -1157,9 +995,8 @@ int av1_destroy_decoder(Av1Decoder *decoder) {
         decoder->workers = NULL;
     }
     
-    // Step 5: Signal and join GPU thread
+    // Stop and join GPU thread
     if (decoder->gpu_thread) {
-        printf("av1_destroy_decoder: stopping GPU thread\n");
         if (decoder->gpu_thread->running) {
             pthread_cancel(decoder->gpu_thread->thread);
         }
@@ -1168,50 +1005,46 @@ int av1_destroy_decoder(Av1Decoder *decoder) {
         decoder->gpu_thread = NULL;
     }
     
-    // Step 6: Release DPB slots
-    printf("av1_destroy_decoder: releasing DPB slots\n");
+    // Destroy copy thread
+    if (decoder->copy_thread) {
+        av1_copy_thread_destroy(decoder->copy_thread);
+        decoder->copy_thread = NULL;
+    }
+    
+    // Release DPB slots
     for (int i = 0; i < decoder->dpb_count; i++) {
         if (decoder->dpb[i].in_use) {
             if (decoder->dpb[i].planes[0]) av1_mem_free(decoder->dpb[i].planes[0]);
             if (decoder->dpb[i].planes[1]) av1_mem_free(decoder->dpb[i].planes[1]);
             if (decoder->dpb[i].planes[2]) av1_mem_free(decoder->dpb[i].planes[2]);
-            decoder->dpb[i].in_use = 0;
         }
     }
     
-    // Step 7: Destroy queues
+    // Destroy queues
     av1_frame_queue_destroy(&decoder->output_queue);
     av1_frame_queue_destroy(&decoder->ready_queue);
     
     // Free queue storage
     if (decoder->queue_storage) {
         av1_mem_free(decoder->queue_storage);
-        decoder->queue_storage = NULL;
     }
     
-    // Step 8: Destroy synchronization primitives
+    // Destroy synchronization primitives
     pthread_cond_destroy(&decoder->decoder_cond);
     pthread_mutex_destroy(&decoder->decoder_mutex);
     
-    // Step 9: Destroy AOM decoder
+    // Destroy AOM decoder
     if (decoder->aom_decoder_initialized) {
         aom_codec_destroy(&decoder->aom_decoder);
         decoder->aom_decoder_initialized = false;
     }
     
-    // Step 10: Zero the decoder struct (security wipe)
-    void *decoder_ptr = decoder;
-    size_t decoder_size = sizeof(Av1Decoder);
-    memset(decoder_ptr, 0, decoder_size);
+    // Free decoder structure
+    av1_mem_free(decoder);
     
-    // Step 11: Clear the memory pool flag (restore normal malloc)
+    // Shutdown memory allocator
     av1_mem_set_override_enabled(false);
     av1_mem_shutdown();
-    
-    // Free decoder structure using standard free (not av1_mem_free since we disabled override)
-    free(decoder);
-    
-    printf("av1_destroy_decoder: complete\n");
     
     return 0;
 }
@@ -1258,27 +1091,16 @@ Av1DecodeResult av1_decode(Av1Decoder *decoder,
         return AV1_INVALID_PARAM;
     }
     
-    // Check if decoder is destroyed
-    if (decoder->destroyed) {
-        fprintf(stderr, "av1_decode: decoder is destroyed\n");
-        return AV1_INVALID_PARAM;
-    }
-    
     if (!data || data_size == 0) {
         fprintf(stderr, "av1_decode: NULL data or zero size\n");
         return AV1_INVALID_PARAM;
     }
     
-    // Check decoder state - reject if FLUSHING
-    if (decoder->state == AV1_DECODER_STATE_FLUSHING) {
-        fprintf(stderr, "av1_decode: decoder is flushing, rejecting new data\n");
-        return AV1_FLUSHED;
-    }
-    
     // Check decoder state
     if (decoder->state != AV1_DECODER_STATE_CREATED &&
         decoder->state != AV1_DECODER_STATE_READY &&
-        decoder->state != AV1_DECODER_STATE_DECODING) {
+        decoder->state != AV1_DECODER_STATE_DECODING &&
+        decoder->state != AV1_DECODER_STATE_FLUSHING) {
         fprintf(stderr, "av1_decode: invalid decoder state %d\n", decoder->state);
         return AV1_INVALID_PARAM;
     }
@@ -1289,7 +1111,8 @@ Av1DecodeResult av1_decode(Av1Decoder *decoder,
     // Check if ready queue is full
     if (av1_frame_queue_is_full(&decoder->ready_queue)) {
         fprintf(stderr, "av1_decode: ready queue is full\n");
-        decoder->state = AV1_DECODER_STATE_READY;
+        decoder->state = (decoder->state == AV1_DECODER_STATE_FLUSHING) ? 
+                         AV1_DECODER_STATE_FLUSHING : AV1_DECODER_STATE_READY;
         return AV1_QUEUE_FULL;
     }
     
@@ -1373,15 +1196,46 @@ Av1DecodeResult av1_decode(Av1Decoder *decoder,
         out_result->dpb_slot = dpb_slot;
     }
     
-    // Set state back to READY
-    decoder->state = AV1_DECODER_STATE_READY;
+    // Set state back to READY or FLUSHING
+    decoder->state = (decoder->state == AV1_DECODER_STATE_FLUSHING) ? 
+                     AV1_DECODER_STATE_FLUSHING : AV1_DECODER_STATE_READY;
     
     return AV1_OK;
 }
 
-// Legacy function - now just calls av1_flush
 Av1DecodeResult av1_decode_end(Av1Decoder *decoder) {
-    return av1_flush(decoder);
+    if (!decoder) {
+        return AV1_INVALID_PARAM;
+    }
+    
+    // Signal end of stream
+    decoder->state = AV1_DECODER_STATE_FLUSHING;
+    
+    // Flush AOM decoder to get remaining frames
+    aom_codec_err_t aom_err = aom_codec_decode(&decoder->aom_decoder, NULL, 0, NULL);
+    if (aom_err != AOM_CODEC_OK) {
+        // Ignore flush errors
+    }
+    
+    // Try to get any remaining frames
+    aom_image_t *img;
+    while ((img = aom_codec_get_frame(&decoder->aom_decoder, &decoder->aom_decoder.iter)) != NULL) {
+        uint32_t frame_id = decoder->next_frame_id++;
+        int dpb_slot = allocate_dpb_slot(decoder, img->w, img->h, img->bit_depth);
+        
+        if (dpb_slot >= 0) {
+            Av1FrameEntry entry = {
+                .frame_id = frame_id,
+                .dpb_slot = dpb_slot,
+                .show_frame = 1,
+                .show_existing_frame = 0
+            };
+            av1_frame_queue_push(&decoder->ready_queue, &entry);
+            decoder->frames_decoded++;
+        }
+    }
+    
+    return AV1_OK;
 }
 
 // ============================================================================
@@ -1392,11 +1246,6 @@ Av1DecodeResult av1_sync(Av1Decoder *decoder,
                          uint32_t timeout_us,
                          Av1DecodeOutput *out_result) {
     if (!decoder) {
-        return AV1_INVALID_PARAM;
-    }
-    
-    // Check if destroyed
-    if (decoder->destroyed) {
         return AV1_INVALID_PARAM;
     }
     
@@ -1448,11 +1297,6 @@ Av1DecodeResult av1_set_output(Av1Decoder *decoder,
                                uint32_t frame_id,
                                const Av1OutputBuffer *output_buffer) {
     if (!decoder || !output_buffer) {
-        return AV1_INVALID_PARAM;
-    }
-    
-    // Check if destroyed
-    if (decoder->destroyed) {
         return AV1_INVALID_PARAM;
     }
     
@@ -1540,11 +1384,6 @@ Av1DecodeResult av1_receive_output(Av1Decoder *decoder,
         return AV1_INVALID_PARAM;
     }
     
-    // Check if destroyed
-    if (decoder->destroyed) {
-        return AV1_INVALID_PARAM;
-    }
-    
     // Find pending output entry
     Av1PendingOutput *pending = find_pending_output(decoder, frame_id);
     if (!pending) {
@@ -1598,10 +1437,6 @@ Av1DecodeResult av1_get_decoded_frame(Av1Decoder *decoder,
         return AV1_INVALID_PARAM;
     }
     
-    if (decoder->destroyed) {
-        return AV1_INVALID_PARAM;
-    }
-    
     int result = av1_frame_queue_pop(&decoder->ready_queue, out_entry, timeout_us);
     
     if (result == 0) {
@@ -1614,10 +1449,6 @@ Av1DecodeResult av1_get_decoded_frame(Av1Decoder *decoder,
 
 Av1DecodeResult av1_release_frame(Av1Decoder *decoder, uint32_t frame_id) {
     if (!decoder) {
-        return AV1_INVALID_PARAM;
-    }
-    
-    if (decoder->destroyed) {
         return AV1_INVALID_PARAM;
     }
     
@@ -1635,22 +1466,347 @@ Av1DecodeResult av1_release_frame(Av1Decoder *decoder, uint32_t frame_id) {
 }
 ```
 
-### test_flush_destroy.c
+### y4m_writer.h
+```c
+#ifndef Y4M_WRITER_H
+#define Y4M_WRITER_H
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <stdio.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// ============================================================================
+// Y4M Writer Handle
+// ============================================================================
+
+typedef struct Y4MWriter Y4MWriter;
+
+// ============================================================================
+// Y4M Colorspace Types
+// ============================================================================
+
+#define Y4M_COLORSPACE_YUV420 "420"
+#define Y4M_COLORSPACE_YUV422 "422"
+#define Y4M_COLORSPACE_YUV444 "444"
+#define Y4M_COLORSPACE_YUV420P10 "420p10"
+#define Y4M_COLORSPACE_YUV420P12 "420p12"
+
+// ============================================================================
+// API Functions
+// ============================================================================
+
+/**
+ * Open a Y4M file for writing.
+ * 
+ * @param filename Path to output Y4M file
+ * @param width    Frame width in pixels
+ * @param height   Frame height in pixels
+ * @param fps_n    Frame rate numerator (e.g., 30)
+ * @param fps_d    Frame rate denominator (e.g., 1)
+ * @param bit_depth Bit depth (8, 10, 12)
+ * @param chroma_subsampling Chroma subsampling (0=420, 1=422, 2=444)
+ * @return Writer handle on success, NULL on failure
+ */
+Y4MWriter *y4m_writer_open(const char *filename, 
+                            int width, 
+                            int height,
+                            int fps_n, 
+                            int fps_d,
+                            int bit_depth,
+                            int chroma_subsampling);
+
+/**
+ * Close a Y4M file and free resources.
+ * 
+ * @param writer Writer handle
+ * @return 0 on success, -1 on error
+ */
+int y4m_writer_close(Y4MWriter *writer);
+
+/**
+ * Write a frame to the Y4M file.
+ * 
+ * @param writer Writer handle
+ * @param y      Y plane data
+ * @param u      U plane data
+ * @param v      V plane data
+ * @param y_stride Y plane stride (bytes per row)
+ * @param u_stride U plane stride
+ * @param v_stride V plane stride
+ * @return 0 on success, -1 on error
+ */
+int y4m_writer_write_frame(Y4MWriter *writer,
+                            const uint8_t *y,
+                            const uint8_t *u,
+                            const uint8_t *v,
+                            int y_stride,
+                            int u_stride,
+                            int v_stride);
+
+/**
+ * Write a frame from an Av1OutputBuffer.
+ * 
+ * @param writer Writer handle
+ * @param buffer Output buffer with frame data
+ * @return 0 on success, -1 on error
+ */
+int y4m_writer_write_buffer(Y4MWriter *writer, 
+                             const Av1OutputBuffer *buffer);
+
+/**
+ * Get the number of frames written.
+ * 
+ * @param writer Writer handle
+ * @return Number of frames written
+ */
+uint64_t y4m_writer_get_frame_count(const Y4MWriter *writer);
+
+/**
+ * Check if the writer is valid and open.
+ * 
+ * @param writer Writer handle
+ * @return true if valid, false otherwise
+ */
+bool y4m_writer_is_valid(const Y4MWriter *writer);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // Y4M_WRITER_H
+```
+
+### y4m_writer.c
+```c
+#include "y4m_writer.h"
+#include "av1_decoder_api.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+
+// ============================================================================
+// Internal Structures
+// ============================================================================
+
+struct Y4MWriter {
+    FILE *file;
+    int width;
+    int height;
+    int fps_n;
+    int fps_d;
+    int bit_depth;
+    int chroma_subsampling;
+    uint64_t frame_count;
+    bool valid;
+};
+
+// ============================================================================
+// Internal Functions
+// ============================================================================
+
+static const char* get_colorspace(int chroma_subsampling, int bit_depth) {
+    if (bit_depth > 8) {
+        switch (chroma_subsampling) {
+            case 0: return "420p10";
+            case 1: return "422p10";
+            case 2: return "444p10";
+            default: return "420p10";
+        }
+    } else {
+        switch (chroma_subsampling) {
+            case 0: return "420";
+            case 1: return "422";
+            case 2: return "444";
+            default: return "420";
+        }
+    }
+}
+
+// ============================================================================
+// API Implementation
+// ============================================================================
+
+Y4MWriter *y4m_writer_open(const char *filename, 
+                            int width, 
+                            int height,
+                            int fps_n, 
+                            int fps_d,
+                            int bit_depth,
+                            int chroma_subsampling) {
+    if (!filename || width <= 0 || height <= 0) {
+        fprintf(stderr, "y4m_writer_open: invalid parameters\n");
+        return NULL;
+    }
+    
+    // Allocate writer
+    Y4MWriter *writer = (Y4MWriter *)calloc(1, sizeof(Y4MWriter));
+    if (!writer) {
+        fprintf(stderr, "y4m_writer_open: failed to allocate writer\n");
+        return NULL;
+    }
+    
+    // Open file
+    writer->file = fopen(filename, "wb");
+    if (!writer->file) {
+        fprintf(stderr, "y4m_writer_open: failed to open file: %s\n", filename);
+        free(writer);
+        return NULL;
+    }
+    
+    // Store parameters
+    writer->width = width;
+    writer->height = height;
+    writer->fps_n = fps_n > 0 ? fps_n : 30;
+    writer->fps_d = fps_d > 0 ? fps_d : 1;
+    writer->bit_depth = bit_depth > 0 ? bit_depth : 8;
+    writer->chroma_subsampling = chroma_subsampling;
+    writer->frame_count = 0;
+    writer->valid = true;
+    
+    // Write Y4M header
+    const char *colorspace = get_colorspace(chroma_subsampling, writer->bit_depth);
+    fprintf(writer->file, "YUV4MPEG2 W%d H%d F%d:%d C%s\n",
+            width, height, writer->fps_n, writer->fps_d, colorspace);
+    
+    printf("Y4M file opened: %s (%dx%d, %s, %dfps)\n", 
+           filename, width, height, colorspace, writer->fps_n);
+    
+    return writer;
+}
+
+int y4m_writer_close(Y4MWriter *writer) {
+    if (!writer) {
+        return -1;
+    }
+    
+    if (writer->file) {
+        fclose(writer->file);
+    }
+    
+    printf("Y4M file closed: %lu frames written\n", 
+           (unsigned long)writer->frame_count);
+    
+    free(writer);
+    return 0;
+}
+
+int y4m_writer_write_frame(Y4MWriter *writer,
+                            const uint8_t *y,
+                            const uint8_t *u,
+                            const uint8_t *v,
+                            int y_stride,
+                            int u_stride,
+                            int v_stride) {
+    if (!writer || !writer->valid || !y || !u || !v) {
+        return -1;
+    }
+    
+    // Write frame header
+    fprintf(writer->file, "FRAME\n");
+    
+    // Calculate plane dimensions
+    int y_width = writer->width;
+    int y_height = writer->height;
+    int uv_width = writer->width;
+    int uv_height = writer->height;
+    
+    switch (writer->chroma_subsampling) {
+        case 0: // 420
+            uv_width = writer->width / 2;
+            uv_height = writer->height / 2;
+            break;
+        case 1: // 422
+            uv_width = writer->width / 2;
+            break;
+        case 2: // 444
+            break;
+        default:
+            uv_width = writer->width / 2;
+            uv_height = writer->height / 2;
+            break;
+    }
+    
+    int bytes_per_sample = (writer->bit_depth > 8) ? 2 : 1;
+    
+    // Write Y plane
+    for (int row = 0; row < y_height; row++) {
+        const uint8_t *row_data = y + (row * y_stride);
+        if (fwrite(row_data, bytes_per_sample, y_width, writer->file) != (size_t)y_width) {
+            return -1;
+        }
+    }
+    
+    // Write U plane
+    for (int row = 0; row < uv_height; row++) {
+        const uint8_t *row_data = u + (row * u_stride);
+        if (fwrite(row_data, bytes_per_sample, uv_width, writer->file) != (size_t)uv_width) {
+            return -1;
+        }
+    }
+    
+    // Write V plane
+    for (int row = 0; row < uv_height; row++) {
+        const uint8_t *row_data = v + (row * v_stride);
+        if (fwrite(row_data, bytes_per_sample, uv_width, writer->file) != (size_t)uv_width) {
+            return -1;
+        }
+    }
+    
+    writer->frame_count++;
+    
+    return 0;
+}
+
+int y4m_writer_write_buffer(Y4MWriter *writer, 
+                             const Av1OutputBuffer *buffer) {
+    if (!writer || !buffer || !buffer->planes[0]) {
+        return -1;
+    }
+    
+    return y4m_writer_write_frame(writer,
+                                   buffer->planes[0],
+                                   buffer->planes[1],
+                                   buffer->planes[2],
+                                   buffer->strides[0],
+                                   buffer->strides[1],
+                                   buffer->strides[2]);
+}
+
+uint64_t y4m_writer_get_frame_count(const Y4MWriter *writer) {
+    if (!writer) {
+        return 0;
+    }
+    return writer->frame_count;
+}
+
+bool y4m_writer_is_valid(const Y4MWriter *writer) {
+    return writer && writer->valid;
+}
+```
+
+### test_sync_output.c
 ```c
 #include "av1_decoder_api.h"
 #include "av1_mem_override.h"
 #include "ivf_parser.h"
+#include "y4m_writer.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <stdint.h>
-#include <unistd.h>
+#include <sys/stat.h>
 
 // Test configuration
-#define TEST_WIDTH      640
-#define TEST_HEIGHT     480
+#define TEST_WIDTH      1920
+#define TEST_HEIGHT     1080
 #define TEST_QUEUE_DEPTH 4
 #define TEST_WORKERS    1
 
@@ -1711,24 +1867,33 @@ static void free_output_buffer(Av1OutputBuffer *buffer) {
     free(buffer);
 }
 
-// Test 1: Normal flush and destroy
-// Decode N frames -> flush -> drain all -> destroy -> free memory
-static void test_normal_flush_destroy(const char *ivf_file) {
+// Get file size
+static size_t get_file_size(const char *filename) {
+    struct stat st;
+    if (stat(filename, &st) != 0) {
+        return 0;
+    }
+    return st.st_size;
+}
+
+// Test 1: Basic sync -> set_output -> receive_output flow
+static void test_basic_sync_output(const char *ivf_file, const char *y4m_file) {
     print_separator();
-    printf("TEST 1: Normal Flush and Destroy\n");
+    printf("TEST: Basic Sync/Output Flow\n");
     print_separator();
     
     // Query memory
     Av1StreamInfo info = {
         .width = TEST_WIDTH,
         .height = TEST_HEIGHT,
-        .max_bitrate = 8,
+        .max_bitrate = 10,
         .chroma_subsampling = 0,
         .is_16bit = false
     };
     
     Av1MemoryRequirements req = av1_query_memory(&info, TEST_QUEUE_DEPTH, TEST_WORKERS);
-    printf("Memory required: %zu bytes\n", req.total_size);
+    printf("Memory required: %zu bytes (%.2f MB)\n", 
+           req.total_size, req.total_size / (1024.0 * 1024.0));
     
     // Allocate memory
     void *mem = aligned_alloc(req.alignment, req.total_size);
@@ -1762,7 +1927,7 @@ static void test_normal_flush_destroy(const char *ivf_file) {
         return;
     }
     
-    printf("Decoder created\n");
+    printf("Decoder created successfully\n");
     
     // Open IVF file
     IvfParser *parser = ivf_parser_open(ivf_file);
@@ -1777,22 +1942,45 @@ static void test_normal_flush_destroy(const char *ivf_file) {
     printf("Input: %s (%ux%u, %u frames)\n", 
            ivf_file, header->width, header->height, header->num_frames);
     
-    // Allocate output buffer
-    Av1OutputBuffer *output = allocate_output_buffer(header->width, header->height, 8);
-    if (!output) {
-        fprintf(stderr, "Failed to allocate output buffer\n");
+    // Open Y4M writer
+    Y4MWriter *y4m = y4m_writer_open(y4m_file, 
+                                       header->width, 
+                                       header->height,
+                                       header->timebase_den > 0 ? header->timebase_den : 30,
+                                       header->timebase_num > 0 ? header->timebase_num : 1,
+                                       8,  // bit depth
+                                       0); // chroma subsampling (420)
+    if (!y4m) {
+        fprintf(stderr, "Failed to create Y4M writer\n");
         ivf_parser_close(parser);
         av1_destroy_decoder(decoder);
         free(mem);
         return;
     }
     
-    // Decode frames
-    printf("\n--- Decoding frames ---\n");
-    int frames_decoded = 0;
-    int max_frames = 10;  // Limit for test
+    printf("Output: %s\n", y4m_file);
     
-    while (!ivf_parser_eof(parser) && frames_decoded < max_frames) {
+    // Allocate output buffer
+    Av1OutputBuffer *output = allocate_output_buffer(header->width, header->height, 8);
+    if (!output) {
+        fprintf(stderr, "Failed to allocate output buffer\n");
+        y4m_writer_close(y4m);
+        ivf_parser_close(parser);
+        av1_destroy_decoder(decoder);
+        free(mem);
+        return;
+    }
+    
+    // Decode and output frames
+    printf("\n--- Decoding and Outputting Frames ---\n");
+    
+    int frames_decoded = 0;
+    int frames_output = 0;
+    int sync_calls = 0;
+    int set_output_calls = 0;
+    int receive_output_calls = 0;
+    
+    while (!ivf_parser_eof(parser)) {
         uint8_t *data = NULL;
         size_t size = 0;
         
@@ -1801,506 +1989,36 @@ static void test_normal_flush_destroy(const char *ivf_file) {
             break;
         }
         
+        // Decode frame
         Av1DecodeOutput decode_output;
         Av1DecodeResult decode_result = av1_decode(decoder, data, size, &decode_output);
         free(data);
         
-        if (decode_result == AV1_OK && decode_output.frame_ready) {
-            frames_decoded++;
-            printf("  Decoded frame %d: frame_id=%u\n", frames_decoded, decode_output.frame_id);
-        } else if (decode_result == AV1_QUEUE_FULL) {
-            printf("  Queue full at frame %d\n", frames_decoded);
-            break;
-        }
-    }
-    
-    printf("Decoded %d frames\n", frames_decoded);
-    
-    // Flush decoder
-    printf("\n--- Flushing decoder ---\n");
-    Av1DecodeResult flush_result = av1_flush(decoder);
-    printf("Flush result: %d (AV1_OK=%d)\n", flush_result, AV1_OK);
-    
-    // Verify state is FLUSHING
-    Av1DecoderState state = av1_get_decoder_state(decoder);
-    printf("Decoder state after flush: %d (FLUSHING=%d)\n", state, AV1_DECODER_STATE_FLUSHING);
-    
-    // Try to decode more data (should be rejected)
-    printf("\n--- Testing decode rejection after flush ---\n");
-    uint8_t dummy_data[10] = {0};
-    Av1DecodeOutput dummy_output;
-    Av1DecodeResult reject_result = av1_decode(decoder, dummy_data, sizeof(dummy_data), &dummy_output);
-    printf("Decode after flush result: %d (AV1_FLUSHED=%d)\n", reject_result, AV1_FLUSHED);
-    
-    // Drain remaining frames via sync -> set_output -> receive_output
-    printf("\n--- Draining remaining frames ---\n");
-    int frames_drained = 0;
-    
-    while (1) {
-        Av1DecodeOutput sync_output;
-        Av1DecodeResult sync_result = av1_sync(decoder, 100000, &sync_output);  // 100ms timeout
-        
-        if (sync_result == AV1_END_OF_STREAM) {
-            printf("End of stream reached\n");
-            break;
+        if (decode_result != AV1_OK) {
+            printf("Decode error at frame %d\n", frames_decoded);
+            continue;
         }
         
-        if (sync_result != AV1_OK) {
-            printf("Sync returned %d, breaking\n", sync_result);
-            break;
-        }
+        frames_decoded++;
         
-        printf("  Synced frame_id=%u\n", sync_output.frame_id);
-        
-        // Set output and receive
-        Av1DecodeResult set_result = av1_set_output(decoder, sync_output.frame_id, output);
-        if (set_result == AV1_OK) {
-            Av1DecodeResult receive_result = av1_receive_output(decoder, sync_output.frame_id, 1000000);
-            if (receive_result == AV1_OK) {
-                frames_drained++;
-            }
-        }
-    }
-    
-    printf("Drained %d frames\n", frames_drained);
-    
-    // Destroy decoder
-    printf("\n--- Destroying decoder ---\n");
-    int destroy_result = av1_destroy_decoder(decoder);
-    printf("Destroy result: %d\n", destroy_result);
-    
-    // Free memory
-    printf("Freeing memory block\n");
-    free(mem);
-    free_output_buffer(output);
-    ivf_parser_close(parser);
-    
-    printf("\nTEST 1 PASSED: Normal flush and destroy completed successfully\n");
-}
-
-// Test 2: Early destroy (without flush)
-// Decode N frames -> destroy without flush -> no hang
-static void test_early_destroy(const char *ivf_file) {
-    print_separator();
-    printf("TEST 2: Early Destroy (Without Flush)\n");
-    print_separator();
-    
-    // Query memory
-    Av1StreamInfo info = {
-        .width = TEST_WIDTH,
-        .height = TEST_HEIGHT,
-        .max_bitrate = 8,
-        .chroma_subsampling = 0,
-        .is_16bit = false
-    };
-    
-    Av1MemoryRequirements req = av1_query_memory(&info, TEST_QUEUE_DEPTH, TEST_WORKERS);
-    
-    // Allocate memory
-    void *mem = aligned_alloc(req.alignment, req.total_size);
-    if (!mem) {
-        fprintf(stderr, "Failed to allocate memory\n");
-        return;
-    }
-    memset(mem, 0, req.total_size);
-    
-    // Create decoder
-    Av1DecoderConfig config = {
-        .memory_base = mem,
-        .memory_size = req.total_size,
-        .queue_depth = TEST_QUEUE_DEPTH,
-        .num_worker_threads = TEST_WORKERS,
-        .enable_threading = false
-    };
-    
-    Av1Decoder *decoder = av1_create_decoder(&config);
-    if (!decoder) {
-        fprintf(stderr, "Failed to create decoder\n");
-        free(mem);
-        return;
-    }
-    
-    printf("Decoder created\n");
-    
-    // Open IVF file
-    IvfParser *parser = ivf_parser_open(ivf_file);
-    if (!parser) {
-        av1_destroy_decoder(decoder);
-        free(mem);
-        return;
-    }
-    
-    // Decode only 5 frames
-    printf("\n--- Decoding 5 frames ---\n");
-    int frames_decoded = 0;
-    
-    while (!ivf_parser_eof(parser) && frames_decoded < 5) {
-        uint8_t *data = NULL;
-        size_t size = 0;
-        
-        int result = ivf_parser_read_frame(parser, &data, &size, NULL);
-        if (result != 0 || !data) break;
-        
-        Av1DecodeOutput decode_output;
-        av1_decode(decoder, data, size, &decode_output);
-        free(data);
-        
+        // If frame is ready, process it through sync -> set_output -> receive_output
         if (decode_output.frame_ready) {
-            frames_decoded++;
-            printf("  Decoded frame %d\n", frames_decoded);
-        }
-    }
-    
-    printf("Decoded %d frames\n", frames_decoded);
-    
-    // Check ready queue count
-    int queue_count = av1_frame_queue_count(&decoder->ready_queue);
-    printf("Ready queue has %d frames\n", queue_count);
-    
-    // Destroy WITHOUT calling flush first
-    printf("\n--- Destroying decoder WITHOUT flush ---\n");
-    int destroy_result = av1_destroy_decoder(decoder);
-    printf("Destroy result: %d\n", destroy_result);
-    
-    // Free memory
-    free(mem);
-    ivf_parser_close(parser);
-    
-    printf("\nTEST 2 PASSED: Early destroy completed without hang\n");
-}
-
-// Test 3: Empty destroy (create -> destroy immediately)
-static void test_empty_destroy(void) {
-    print_separator();
-    printf("TEST 3: Empty Destroy (Create -> Destroy Immediately)\n");
-    print_separator();
-    
-    // Query memory
-    Av1StreamInfo info = {
-        .width = 320,
-        .height = 240,
-        .max_bitrate = 8,
-        .chroma_subsampling = 0,
-        .is_16bit = false
-    };
-    
-    Av1MemoryRequirements req = av1_query_memory(&info,
-
-```c
-                                              2, 1);
-    
-    // Allocate memory
-    void *mem = aligned_alloc(req.alignment, req.total_size);
-    if (!mem) {
-        fprintf(stderr, "Failed to allocate memory\n");
-        return;
-    }
-    memset(mem, 0, req.total_size);
-    
-    // Create decoder
-    Av1DecoderConfig config = {
-        .memory_base = mem,
-        .memory_size = req.total_size,
-        .queue_depth = 2,
-        .num_worker_threads = 1,
-        .enable_threading = false
-    };
-    
-    printf("Creating decoder...\n");
-    Av1Decoder *decoder = av1_create_decoder(&config);
-    
-    if (!decoder) {
-        fprintf(stderr, "Failed to create decoder\n");
-        free(mem);
-        return;
-    }
-    
-    printf("Decoder created successfully\n");
-    
-    // Immediately destroy without any decode calls
-    printf("Destroying decoder immediately...\n");
-    int destroy_result = av1_destroy_decoder(decoder);
-    printf("Destroy result: %d\n", destroy_result);
-    
-    // Free memory
-    free(mem);
-    
-    printf("\nTEST 3 PASSED: Empty destroy completed without crash\n");
-}
-
-// Test 4: Double destroy (should be handled gracefully)
-static void test_double_destroy(void) {
-    print_separator();
-    printf("TEST 4: Double Destroy\n");
-    print_separator();
-    
-    // Query memory
-    Av1StreamInfo info = {
-        .width = 320,
-        .height = 240,
-        .max_bitrate = 8,
-        .chroma_subsampling = 0,
-        .is_16bit = false
-    };
-    
-    Av1MemoryRequirements req = av1_query_memory(&info, 2, 1);
-    
-    // Allocate memory
-    void *mem = aligned_alloc(req.alignment, req.total_size);
-    if (!mem) {
-        fprintf(stderr, "Failed to allocate memory\n");
-        return;
-    }
-    memset(mem, 0, req.total_size);
-    
-    // Create decoder
-    Av1DecoderConfig config = {
-        .memory_base = mem,
-        .memory_size = req.total_size,
-        .queue_depth = 2,
-        .num_worker_threads = 1,
-        .enable_threading = false
-    };
-    
-    Av1Decoder *decoder = av1_create_decoder(&config);
-    if (!decoder) {
-        free(mem);
-        return;
-    }
-    
-    printf("Decoder created\n");
-    
-    // First destroy
-    printf("First destroy...\n");
-    int result1 = av1_destroy_decoder(decoder);
-    printf("First destroy result: %d\n", result1);
-    
-    // Second destroy (should return error or no-op)
-    printf("Second destroy (should fail gracefully)...\n");
-    int result2 = av1_destroy_decoder(decoder);
-    printf("Second destroy result: %d\n", result2);
-    
-    // Free memory
-    free(mem);
-    
-    if (result2 == -1) {
-        printf("\nTEST 4 PASSED: Double destroy handled gracefully\n");
-    } else {
-        printf("\nTEST 4 WARNING: Double destroy did not return error\n");
-    }
-}
-
-// Test 5: Destroy while copy in progress
-static void test_destroy_while_copying(const char *ivf_file) {
-    print_separator();
-    printf("TEST 5: Destroy While Copy In Progress\n");
-    print_separator();
-    
-    // Query memory
-    Av1StreamInfo info = {
-        .width = TEST_WIDTH,
-        .height = TEST_HEIGHT,
-        .max_bitrate = 8,
-        .chroma_subsampling = 0,
-        .is_16bit = false
-    };
-    
-    Av1MemoryRequirements req = av1_query_memory(&info, TEST_QUEUE_DEPTH, TEST_WORKERS);
-    
-    // Allocate memory
-    void *mem = aligned_alloc(req.alignment, req.total_size);
-    if (!mem) {
-        fprintf(stderr, "Failed to allocate memory\n");
-        return;
-    }
-    memset(mem, 0, req.total_size);
-    
-    // Create decoder
-    Av1DecoderConfig config = {
-        .memory_base = mem,
-        .memory_size = req.total_size,
-        .queue_depth = TEST_QUEUE_DEPTH,
-        .num_worker_threads = TEST_WORKERS,
-        .enable_threading = false
-    };
-    
-    Av1Decoder *decoder = av1_create_decoder(&config);
-    if (!decoder) {
-        free(mem);
-        return;
-    }
-    
-    // Open IVF file
-    IvfParser *parser = ivf_parser_open(ivf_file);
-    if (!parser) {
-        av1_destroy_decoder(decoder);
-        free(mem);
-        return;
-    }
-    
-    // Decode some frames
-    printf("\n--- Decoding frames ---\n");
-    int frames_decoded = 0;
-    
-    while (!ivf_parser_eof(parser) && frames_decoded < 3) {
-        uint8_t *data = NULL;
-        size_t size = 0;
-        
-        if (ivf_parser_read_frame(parser, &data, &size, NULL) != 0 || !data) break;
-        
-        Av1DecodeOutput output;
-        av1_decode(decoder, data, size, &output);
-        free(data);
-        
-        if (output.frame_ready) {
-            frames_decoded++;
-        }
-    }
-    
-    printf("Decoded %d frames\n", frames_decoded);
-    
-    // Sync a frame
-    Av1DecodeOutput sync_output;
-    if (av1_sync(decoder, 0, &sync_output) == AV1_OK) {
-        printf("Synced frame_id=%u\n", sync_output.frame_id);
-        
-        // Allocate output buffer
-        Av1OutputBuffer *output = allocate_output_buffer(640, 480, 8);
-        if (output) {
-            // Set output (starts copy)
-            av1_set_output(decoder, sync_output.frame_id, output);
-            printf("Copy job enqueued\n");
+            printf("Frame %d: frame_id=%u ready\n", frames_decoded, decode_output.frame_id);
             
-            // Destroy immediately while copy is in progress
-            printf("\n--- Destroying while copy in progress ---\n");
-            int destroy_result = av1_destroy_decoder(decoder);
-            printf("Destroy result: %d\n", destroy_result);
+            // Step 1: av1_sync - get frame from ready queue
+            Av1DecodeOutput sync_output;
+            Av1DecodeResult sync_result = av1_sync(decoder, 0, &sync_output);
+            sync_calls++;
             
-            free_output_buffer(output);
-        }
-    } else {
-        av1_destroy_decoder(decoder);
-    }
-    
-    // Free memory
-    free(mem);
-    ivf_parser_close(parser);
-    
-    printf("\nTEST 5 PASSED: Destroy while copying handled\n");
-}
-
-// Test 6: Error handling
-static void test_error_handling(void) {
-    print_separator();
-    printf("TEST 6: Error Handling\n");
-    print_separator();
-    
-    // Test 1: av1_flush with NULL decoder
-    printf("\nTest 1: av1_flush with NULL decoder\n");
-    Av1DecodeResult result = av1_flush(NULL);
-    if (result == AV1_INVALID_PARAM) {
-        printf("  PASS: AV1_INVALID_PARAM\n");
-    } else {
-        printf("  FAIL: got %d\n", result);
-    }
-    
-    // Test 2: av1_destroy with NULL decoder
-    printf("\nTest 2: av1_destroy with NULL decoder\n");
-    int destroy_result = av1_destroy_decoder(NULL);
-    if (destroy_result == -1) {
-        printf("  PASS: returned -1\n");
-    } else {
-        printf("  FAIL: got %d\n", destroy_result);
-    }
-    
-    // Test 3: av1_decode after flush returns AV1_FLUSHED
-    printf("\nTest 3: av1_decode after flush\n");
-    Av1StreamInfo info = { .width = 320, .height = 240, .max_bitrate = 8 };
-    Av1MemoryRequirements req = av1_query_memory(&info, 2, 1);
-    
-    void *mem = aligned_alloc(req.alignment, req.total_size);
-    if (mem) {
-        memset(mem, 0, req.total_size);
-        
-        Av1DecoderConfig config = {
-            .memory_base = mem,
-            .memory_size = req.total_size,
-            .queue_depth = 2,
-            .num_worker_threads = 1,
-            .enable_threading = false
-        };
-        
-        Av1Decoder *decoder = av1_create_decoder(&config);
-        if (decoder) {
-            // Flush
-            av1_flush(decoder);
-            
-            // Try to decode
-            uint8_t dummy[10] = {0};
-            Av1DecodeOutput output;
-            result = av1_decode(decoder, dummy, sizeof(dummy), &output);
-            
-            if (result == AV1_FLUSHED) {
-                printf("  PASS: AV1_FLUSHED\n");
-            } else {
-                printf("  FAIL: got %d\n", result);
-            }
-            
-            av1_destroy_decoder(decoder);
-        }
-        
-        free(mem);
-    }
-    
-    printf("\nTEST 6 PASSED: Error handling tests completed\n");
-}
-
-int main(int argc, char *argv[]) {
-    printf("=== AV1 Flush and Destroy Tests ===\n\n");
-    
-    const char *ivf_file = "test.ivf";
-    
-    if (argc > 1) {
-        ivf_file = argv[1];
-    }
-    
-    // Check if IVF file exists
-    if (!ivf_parser_is_valid(ivf_file)) {
-        fprintf(stderr, "Error: %s is not a valid IVF file\n", ivf_file);
-        fprintf(stderr, "Creating test with minimal decoder (no file)\n");
-        
-        // Run tests that don't require IVF file
-        test_empty_destroy();
-        printf("\n");
-        
-        test_double_destroy();
-        printf("\n");
-        
-        test_error_handling();
-    } else {
-        // Run all tests
-        test_normal_flush_destroy(ivf_file);
-        printf("\n");
-        
-        test_early_destroy(ivf_file);
-        printf("\n");
-        
-        test_empty_destroy();
-        printf("\n");
-        
-        test_double_destroy();
-        printf("\n");
-        
-        test_destroy_while_copying(ivf_file);
-        printf("\n");
-        
-        test_error_handling();
-    }
-    
-    print_separator();
-    printf("All tests completed!\n");
-    print_separator();
-    
-    return 0;
-}
-```
+            if (sync_result == AV1_OK) {
+                printf("  sync: frame_id=%u\n", sync_output.frame_id);
+                
+                // Step 2: av1_set_output - copy to output buffer
+                Av1DecodeResult set_result = av1_set_output(decoder, sync_output.frame_id, output);
+                set_output_calls++;
+                
+                if (set_result == AV1_OK) {
+                    printf("  set_output: enqueued copy job\n");
+                    
+                    // Step 3: av1_receive_output - wait for copy and release
+                    Av1DecodeResult receive

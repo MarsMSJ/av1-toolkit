@@ -1,19 +1,31 @@
 {
   "prompt_id": 9,
   "prompt_name": "integration_test",
-  "timestamp": "2026-04-10T00:41:14.701331",
-  "elapsed_seconds": 67.77607345581055,
+  "timestamp": "2026-04-11T07:58:26.242462",
+  "elapsed_seconds": 2434.810001850128,
   "finish_reason": "stop",
   "usage": {
-    "prompt_tokens": 1190,
-    "total_tokens": 1549,
-    "completion_tokens": 359,
-    "prompt_tokens_details": null
+    "prompt_tokens": 80042,
+    "completion_tokens": 10855,
+    "total_tokens": 90897
   },
+  "continuations": 0,
   "model": "MiniMax-M2.5",
   "temperature": 0.2,
   "max_tokens": 16384,
-  "extracted_files": [],
+  "extracted_files": [
+    "unnamed_1.c",
+    "unnamed_2.c",
+    "unnamed_3.c",
+    "unnamed_4.c",
+    "unnamed_5.c",
+    "unnamed_6.c",
+    "unnamed_7.c",
+    "unnamed_8.c",
+    "unnamed_9.c",
+    "test_e2e.c",
+    "generate_test_ivf.c"
+  ],
   "checklist": [
     "Successfully decodes at least one AV1 .ivf test vector",
     "Output matches aomdec bit-exactly",
@@ -23,5 +35,5 @@
     "No thread leaks (all threads joined at exit)",
     "IVF parser handles edge cases (empty file, truncated frame)"
   ],
-  "response_hash": "1a2c00dce7f150b4"
+  "response_hash": "e9142b1057b96bf0"
 }
