@@ -1144,6 +1144,38 @@ def main():
         total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         final_finish_reason = None
 
+        # Save results helper — always writes metadata regardless of outcome
+        def save_results(reason):
+            prompt_dir.mkdir(parents=True, exist_ok=True)
+            saved_files = []
+            if full_text.strip():
+                saved_files = extract_and_save_files(full_text, prompt_dir)
+                saved_outputs[pid] = full_text
+                log(f"  Saved raw response + extracted files: {saved_files}")
+                if continuation > 0:
+                    log(f"  Total output: {len(full_text)} chars across {continuation + 1} requests")
+
+            meta = {
+                "prompt_id": pid,
+                "prompt_name": name,
+                "timestamp": datetime.now().isoformat(),
+                "elapsed_seconds": time.time() - start_time,
+                "finish_reason": reason,
+                "usage": total_usage,
+                "continuations": continuation,
+                "model": args.model,
+                "temperature": args.temperature,
+                "max_tokens": args.max_tokens,
+                "extracted_files": saved_files,
+                "checklist": prompt_info["checklist"],
+                "response_hash": hashlib.sha256(full_text.encode()).hexdigest()[:16] if full_text else "",
+            }
+            (prompt_dir / "metadata.json").write_text(
+                json.dumps(meta, indent=2), encoding="utf-8"
+            )
+            log(f"  Metadata saved: finish_reason={reason}")
+            return saved_files
+
         try:
             while continuation <= MAX_CONTINUATIONS:
                 label = f"(continuation {continuation})" if continuation > 0 else ""
@@ -1219,50 +1251,18 @@ def main():
                     final_finish_reason = finish_reason
                     break
 
-            if final_finish_reason == "timeout_empty":
-                continue
+            save_results(final_finish_reason)
 
-            # Save outputs
-            saved_files = extract_and_save_files(full_text, prompt_dir)
-            log(f"  Saved raw response + extracted files: {saved_files}")
-            if continuation > 0:
-                log(f"  Total output: {len(full_text)} chars across {continuation + 1} requests")
-
-            # Save the response for use as context by later prompts
-            saved_outputs[pid] = full_text
-
-            # Save metadata
-            meta = {
-                "prompt_id": pid,
-                "prompt_name": name,
-                "timestamp": datetime.now().isoformat(),
-                "elapsed_seconds": time.time() - start_time,
-                "finish_reason": final_finish_reason,
-                "usage": total_usage,
-                "continuations": continuation,
-                "model": args.model,
-                "temperature": args.temperature,
-                "max_tokens": args.max_tokens,
-                "extracted_files": saved_files,
-                "checklist": prompt_info["checklist"],
-                "response_hash": hashlib.sha256(full_text.encode()).hexdigest()[:16],
-            }
-            (prompt_dir / "metadata.json").write_text(
-                json.dumps(meta, indent=2), encoding="utf-8"
-            )
-
-            # Print checklist reminder
-            log(f"  Verification checklist for Prompt {pid}:")
-            for item in prompt_info["checklist"]:
-                log(f"    [ ] {item}")
+            if final_finish_reason not in ("timeout_empty",):
+                # Print checklist reminder for non-empty results
+                log(f"  Verification checklist for Prompt {pid}:")
+                for item in prompt_info["checklist"]:
+                    log(f"    [ ] {item}")
 
         except requests.exceptions.ConnectionError as e:
             log(f"  ✗ CONNECTION ERROR: {e}")
             log(f"  Is vLLM running at {args.base_url}?")
-            if full_text.strip():
-                log(f"  Saving {len(full_text)} chars of partial output before exit")
-                prompt_dir.mkdir(parents=True, exist_ok=True)
-                extract_and_save_files(full_text, prompt_dir)
+            save_results(f"connection_error: {e}")
             sys.exit(1)
         except requests.exceptions.HTTPError as e:
             log(f"  ✗ HTTP ERROR: {e}")
@@ -1270,13 +1270,11 @@ def main():
                 log(f"  Response body: {e.response.text[:500]}")
             except Exception:
                 pass
+            save_results(f"http_error: {e}")
             continue
         except Exception as e:
             log(f"  ✗ UNEXPECTED ERROR: {type(e).__name__}: {e}")
-            if full_text.strip():
-                log(f"  Saving {len(full_text)} chars of partial output")
-                prompt_dir.mkdir(parents=True, exist_ok=True)
-                extract_and_save_files(full_text, prompt_dir)
+            save_results(f"error: {type(e).__name__}: {e}")
             continue
 
         log("")
