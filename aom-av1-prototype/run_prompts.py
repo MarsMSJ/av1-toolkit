@@ -975,6 +975,8 @@ def main():
                         help="Print prompts without sending to the model")
     parser.add_argument("--output-dir", type=str, default=str(OUTPUT_DIR),
                         help=f"Output directory (default: {OUTPUT_DIR})")
+    parser.add_argument("--rerun-all", action="store_true",
+                        help="Re-run all prompts even if they completed successfully before")
     parser.add_argument("--aom-dir", type=str, default=None,
                         help="Path to AOM source tree (auto-detected if not set)")
     args = parser.parse_args()
@@ -994,10 +996,34 @@ def main():
 
     # Load any previously saved outputs for context injection
     saved_outputs = {}
+    completed_prompts = set()
     for p in PROMPTS:
-        raw_path = output_dir / f"prompt_{p['id']:02d}_{p['name']}" / "raw_response.md"
+        prompt_dir = output_dir / f"prompt_{p['id']:02d}_{p['name']}"
+        raw_path = prompt_dir / "raw_response.md"
+        meta_path = prompt_dir / "metadata.json"
         if raw_path.exists():
             saved_outputs[p["id"]] = raw_path.read_text(encoding="utf-8")
+        # Check if this prompt completed successfully
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                fr = meta.get("finish_reason", "")
+                if fr == "stop":
+                    completed_prompts.add(p["id"])
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+    # Skip already-completed prompts unless --rerun-all
+    if not args.rerun_all and completed_prompts:
+        before = len(to_run)
+        to_run = [p for p in to_run if p["id"] not in completed_prompts]
+        skipped = before - len(to_run)
+        if skipped > 0:
+            print(f"Skipping {skipped} already-completed prompt(s): "
+                  f"{sorted(completed_prompts)}. Use --rerun-all to force.")
+    if not to_run:
+        print("All prompts already completed. Use --rerun-all to re-run.")
+        sys.exit(0)
 
     log_path = output_dir / "run_log.txt"
     def log(msg):
@@ -1020,6 +1046,7 @@ def main():
     log(f"Output dir: {output_dir}")
     log(f"AOM source dir: {aom_base or 'NOT FOUND — prompts will lack source context'}")
     log(f"Running prompts: {[p['id'] for p in to_run]}")
+    log(f"Previously completed (will use as context): {sorted(completed_prompts) or 'none'}")
     log(f"Previously saved outputs available: {list(saved_outputs.keys())}")
     log("")
 
