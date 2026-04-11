@@ -1003,12 +1003,14 @@ def main():
         meta_path = prompt_dir / "metadata.json"
         if raw_path.exists():
             saved_outputs[p["id"]] = raw_path.read_text(encoding="utf-8")
-        # Check if this prompt completed successfully
+        # Check if this prompt completed successfully:
+        # must have finish_reason=stop AND extracted code files
         if meta_path.exists():
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
                 fr = meta.get("finish_reason", "")
-                if fr == "stop":
+                files = meta.get("extracted_files", [])
+                if fr == "stop" and len(files) > 0:
                     completed_prompts.add(p["id"])
             except (json.JSONDecodeError, KeyError):
                 pass
