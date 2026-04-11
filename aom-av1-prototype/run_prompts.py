@@ -1013,8 +1013,8 @@ def main():
             except (json.JSONDecodeError, KeyError):
                 pass
 
-    # Skip already-completed prompts unless --rerun-all
-    if not args.rerun_all and completed_prompts:
+    # Skip already-completed prompts unless --rerun-all or --only
+    if not args.rerun_all and not args.only and completed_prompts:
         before = len(to_run)
         to_run = [p for p in to_run if p["id"] not in completed_prompts]
         skipped = before - len(to_run)
