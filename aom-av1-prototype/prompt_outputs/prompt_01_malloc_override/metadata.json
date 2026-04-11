@@ -1,0 +1,33 @@
+{
+  "prompt_id": 1,
+  "prompt_name": "malloc_override",
+  "timestamp": "2026-04-10T22:59:37.507240",
+  "elapsed_seconds": 1183.1470124721527,
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 1092,
+    "total_tokens": 8568,
+    "completion_tokens": 7476,
+    "prompt_tokens_details": null
+  },
+  "model": "MiniMax-M2.5",
+  "temperature": 0.2,
+  "max_tokens": 16384,
+  "extracted_files": [
+    "unnamed_1.c",
+    "unnamed_2.c",
+    "unnamed_3.c",
+    "av1_mem_override.h",
+    "av1_mem_override.c",
+    "test_mem_override.c"
+  ],
+  "checklist": [
+    "All allocations come from the provided block (no malloc calls)",
+    "Aligned allocations are actually aligned (test with 64-byte alignment)",
+    "Thread-safe under concurrent allocations (test with 4 threads)",
+    "Free + re-allocate works (freed memory can be reused)",
+    "Query size produces reasonable numbers for 1080p and 4K",
+    "Compiles with: gcc -std=c11 -Wall -Wextra -pthread"
+  ],
+  "response_hash": "f71fb841a8f1e153"
+}

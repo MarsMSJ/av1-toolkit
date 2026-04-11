@@ -1,0 +1,33 @@
+{
+  "prompt_id": 3,
+  "prompt_name": "query_create",
+  "timestamp": "2026-04-10T23:40:45.524015",
+  "elapsed_seconds": 1774.4668595790863,
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 12269,
+    "total_tokens": 22514,
+    "completion_tokens": 10245,
+    "prompt_tokens_details": null
+  },
+  "model": "MiniMax-M2.5",
+  "temperature": 0.2,
+  "max_tokens": 16384,
+  "extracted_files": [
+    "unnamed_1.c",
+    "unnamed_2.c",
+    "unnamed_3.c",
+    "av1_decoder_api.h",
+    "av1_decoder_api.c",
+    "test_query_create.c"
+  ],
+  "checklist": [
+    "Query returns reasonable sizes (1080p ~150-300MB, 4K ~1-2GB)",
+    "Create succeeds when given enough memory",
+    "Create fails gracefully when given insufficient memory",
+    "All AOM internal state is initialized",
+    "Threads are created and running",
+    "No system malloc calls during create (all through override)"
+  ],
+  "response_hash": "a354a70e41997513"
+}

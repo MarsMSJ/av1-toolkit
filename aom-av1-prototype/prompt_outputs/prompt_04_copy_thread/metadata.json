@@ -1,0 +1,32 @@
+{
+  "prompt_id": 4,
+  "prompt_name": "copy_thread",
+  "timestamp": "2026-04-11T00:00:17.735831",
+  "elapsed_seconds": 1172.2051229476929,
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 5015,
+    "total_tokens": 12132,
+    "completion_tokens": 7117,
+    "prompt_tokens_details": null
+  },
+  "model": "MiniMax-M2.5",
+  "temperature": 0.2,
+  "max_tokens": 16384,
+  "extracted_files": [
+    "unnamed_1.c",
+    "unnamed_2.c",
+    "unnamed_3.c",
+    "av1_copy_thread.h",
+    "av1_copy_thread.c",
+    "test_copy_thread.c"
+  ],
+  "checklist": [
+    "Byte-identical copy (memcmp src vs dst)",
+    "Multiple sequential copies work",
+    "Clean shutdown (no thread leak, no hang)",
+    "ThreadSanitizer clean",
+    "Atomic status transitions are correct"
+  ],
+  "response_hash": "d05811c6a8b2b5e8"
+}

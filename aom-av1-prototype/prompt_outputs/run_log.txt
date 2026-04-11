@@ -155,3 +155,170 @@
 [2026-04-10 00:41:14] === Run complete ===
 [2026-04-10 00:41:14] Outputs saved to: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/prompt_outputs
 [2026-04-10 00:41:14] Log saved to: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/prompt_outputs/run_log.txt
+[2026-04-10 22:39:54] === AV1 Decoder Prompt Runner ===
+[2026-04-10 22:39:54] Base URL: http://192.168.1.120:8000/v1
+[2026-04-10 22:39:54] Model: MiniMax-M2.5
+[2026-04-10 22:39:54] Max tokens: 16384
+[2026-04-10 22:39:54] Temperature: 0.2
+[2026-04-10 22:39:54] Output dir: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/prompt_outputs
+[2026-04-10 22:39:54] AOM source dir: NOT FOUND — prompts will lack source context
+[2026-04-10 22:39:54] Running prompts: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+[2026-04-10 22:39:54] Previously saved outputs available: [5, 6, 7, 9]
+[2026-04-10 22:39:54] 
+[2026-04-10 22:39:54] Connected to vLLM. Available models: [
+  {
+    "id": "MiniMax-M2.5",
+    "object": "model",
+    "created": 1775885994,
+    "owned_by": "vllm",
+    "root": "/root/.cache/huggingface/MiniMaxAI/MiniMax-M2.5",
+    "parent": null,
+    "max_model_len": 131072,
+    "permission": [
+      {
+        "id": "modelperm-b444a2b6693da91c",
+        "object": "model_permission",
+        "created": 1775885994,
+        "allow_create_engine": false,
+        "allow_sampling": true,
+        "allow_logprobs": true,
+        "allow_search_indices": false,
+        "allow_view": true,
+        "allow_fine_tuning": false,
+        "organization": "*",
+        "group": null,
+        "is_blocking": false
+      }
+    ]
+  }
+]
+[2026-04-10 22:39:54] 
+[2026-04-10 22:39:54] ============================================================
+[2026-04-10 22:39:54] PROMPT 1: malloc/memalign/free Override Layer
+[2026-04-10 22:39:54] ============================================================
+[2026-04-10 22:39:54]   Sending to model (1 messages)...
+[2026-04-10 22:59:37]   Received response in 1183.1s
+[2026-04-10 22:59:37]   Finish reason: stop
+[2026-04-10 22:59:37]   Tokens — prompt: 1092, completion: 7476, total: 8568
+[2026-04-10 22:59:37]   Saved raw response + extracted files: ['unnamed_1.c', 'unnamed_2.c', 'unnamed_3.c', 'av1_mem_override.h', 'av1_mem_override.c', 'test_mem_override.c']
+[2026-04-10 22:59:37]   Verification checklist for Prompt 1:
+[2026-04-10 22:59:37]     [ ] All allocations come from the provided block (no malloc calls)
+[2026-04-10 22:59:37]     [ ] Aligned allocations are actually aligned (test with 64-byte alignment)
+[2026-04-10 22:59:37]     [ ] Thread-safe under concurrent allocations (test with 4 threads)
+[2026-04-10 22:59:37]     [ ] Free + re-allocate works (freed memory can be reused)
+[2026-04-10 22:59:37]     [ ] Query size produces reasonable numbers for 1080p and 4K
+[2026-04-10 22:59:37]     [ ] Compiles with: gcc -std=c11 -Wall -Wextra -pthread
+[2026-04-10 22:59:37] 
+[2026-04-10 22:59:37] ============================================================
+[2026-04-10 22:59:37] PROMPT 2: Job Queue (Simple Mutex-Based)
+[2026-04-10 22:59:37] ============================================================
+[2026-04-10 22:59:37]   Sending to model (1 messages)...
+[2026-04-10 23:11:11]   Received response in 693.5s
+[2026-04-10 23:11:11]   Finish reason: stop
+[2026-04-10 23:11:11]   Tokens — prompt: 992, completion: 4290, total: 5282
+[2026-04-10 23:11:11]   Saved raw response + extracted files: ['unnamed_1.c', 'unnamed_2.c', 'unnamed_3.c', 'av1_job_queue.h', 'av1_job_queue.c', 'test_job_queue.c']
+[2026-04-10 23:11:11]   Verification checklist for Prompt 2:
+[2026-04-10 23:11:11]     [ ] FIFO order preserved
+[2026-04-10 23:11:11]     [ ] Full detection works (push returns -1)
+[2026-04-10 23:11:11]     [ ] Timeout works (pop returns -1 after specified time)
+[2026-04-10 23:11:11]     [ ] Non-blocking poll (timeout=0) returns immediately
+[2026-04-10 23:11:11]     [ ] Two-thread stress test passes under ThreadSanitizer
+[2026-04-10 23:11:11]     [ ] Destroy cleans up mutex/condvar
+[2026-04-10 23:11:11] 
+[2026-04-10 23:11:11] ============================================================
+[2026-04-10 23:11:11] PROMPT 3: av1_query_memory and av1_create_decoder
+[2026-04-10 23:11:11] ============================================================
+[2026-04-10 23:11:11]   Injecting prior output: Prompt 1 (malloc_override) — 26906 chars
+[2026-04-10 23:11:11]   Injecting prior output: Prompt 2 (job_queue) — 14203 chars
+[2026-04-10 23:11:11]   Sending to model (5 messages)...
+[2026-04-10 23:40:45]   Received response in 1774.5s
+[2026-04-10 23:40:45]   Finish reason: stop
+[2026-04-10 23:40:45]   Tokens — prompt: 12269, completion: 10245, total: 22514
+[2026-04-10 23:40:45]   Saved raw response + extracted files: ['unnamed_1.c', 'unnamed_2.c', 'unnamed_3.c', 'av1_decoder_api.h', 'av1_decoder_api.c', 'test_query_create.c']
+[2026-04-10 23:40:45]   Verification checklist for Prompt 3:
+[2026-04-10 23:40:45]     [ ] Query returns reasonable sizes (1080p ~150-300MB, 4K ~1-2GB)
+[2026-04-10 23:40:45]     [ ] Create succeeds when given enough memory
+[2026-04-10 23:40:45]     [ ] Create fails gracefully when given insufficient memory
+[2026-04-10 23:40:45]     [ ] All AOM internal state is initialized
+[2026-04-10 23:40:45]     [ ] Threads are created and running
+[2026-04-10 23:40:45]     [ ] No system malloc calls during create (all through override)
+[2026-04-10 23:40:45] 
+[2026-04-10 23:40:45] ============================================================
+[2026-04-10 23:40:45] PROMPT 4: Copy Thread
+[2026-04-10 23:40:45] ============================================================
+[2026-04-10 23:40:45]   Injecting prior output: Prompt 2 (job_queue) — 14203 chars
+[2026-04-10 23:40:45]   Sending to model (3 messages)...
+[2026-04-11 00:00:17]   Received response in 1172.2s
+[2026-04-11 00:00:17]   Finish reason: stop
+[2026-04-11 00:00:17]   Tokens — prompt: 5015, completion: 7117, total: 12132
+[2026-04-11 00:00:17]   Saved raw response + extracted files: ['unnamed_1.c', 'unnamed_2.c', 'unnamed_3.c', 'av1_copy_thread.h', 'av1_copy_thread.c', 'test_copy_thread.c']
+[2026-04-11 00:00:17]   Verification checklist for Prompt 4:
+[2026-04-11 00:00:17]     [ ] Byte-identical copy (memcmp src vs dst)
+[2026-04-11 00:00:17]     [ ] Multiple sequential copies work
+[2026-04-11 00:00:17]     [ ] Clean shutdown (no thread leak, no hang)
+[2026-04-11 00:00:17]     [ ] ThreadSanitizer clean
+[2026-04-11 00:00:17]     [ ] Atomic status transitions are correct
+[2026-04-11 00:00:17] 
+[2026-04-11 00:00:17] ============================================================
+[2026-04-11 00:00:17] PROMPT 5: av1_decode — Serial Decode with AU = TD-to-TD
+[2026-04-11 00:00:17] ============================================================
+[2026-04-11 00:00:17]   Injecting prior output: Prompt 1 (malloc_override) — 26906 chars
+[2026-04-11 00:00:17]   Injecting prior output: Prompt 2 (job_queue) — 14203 chars
+[2026-04-11 00:00:17]   Injecting prior output: Prompt 3 (query_create) — 40400 chars
+[2026-04-11 00:00:17]   Sending to model (7 messages)...
+[2026-04-11 00:30:17]   ✗ TIMEOUT after 1800.1s (limit: 1800s)
+[2026-04-11 00:30:17]   Skipping to next prompt. Re-run with: --only 5 --timeout 3600
+[2026-04-11 00:30:17] ============================================================
+[2026-04-11 00:30:17] PROMPT 6: av1_sync, av1_set_output, av1_receive_output
+[2026-04-11 00:30:17] ============================================================
+[2026-04-11 00:30:17]   Injecting prior output: Prompt 2 (job_queue) — 14203 chars
+[2026-04-11 00:30:17]   Injecting prior output: Prompt 3 (query_create) — 40400 chars
+[2026-04-11 00:30:17]   Injecting prior output: Prompt 4 (copy_thread) — 23313 chars
+[2026-04-11 00:30:17]   Injecting prior output: Prompt 5 (av1_decode) — 416 chars
+[2026-04-11 00:30:17]   Sending to model (9 messages)...
+[2026-04-11 01:00:17]   ✗ TIMEOUT after 1800.1s (limit: 1800s)
+[2026-04-11 01:00:17]   Skipping to next prompt. Re-run with: --only 6 --timeout 3600
+[2026-04-11 01:00:17] ============================================================
+[2026-04-11 01:00:17] PROMPT 7: av1_flush and av1_destroy_decoder
+[2026-04-11 01:00:17] ============================================================
+[2026-04-11 01:00:17]   Injecting prior output: Prompt 3 (query_create) — 40400 chars
+[2026-04-11 01:00:17]   Injecting prior output: Prompt 4 (copy_thread) — 23313 chars
+[2026-04-11 01:00:17]   Injecting prior output: Prompt 5 (av1_decode) — 416 chars
+[2026-04-11 01:00:17]   Injecting prior output: Prompt 6 (sync_output) — 352 chars
+[2026-04-11 01:00:17]   Sending to model (9 messages)...
+[2026-04-11 01:30:18]   ✗ TIMEOUT after 1800.1s (limit: 1800s)
+[2026-04-11 01:30:18]   Skipping to next prompt. Re-run with: --only 7 --timeout 3600
+[2026-04-11 01:30:18] ============================================================
+[2026-04-11 01:30:18] PROMPT 8: GPU Thread Stub
+[2026-04-11 01:30:18] ============================================================
+[2026-04-11 01:30:18]   Injecting prior output: Prompt 2 (job_queue) — 14203 chars
+[2026-04-11 01:30:18]   Injecting prior output: Prompt 4 (copy_thread) — 23313 chars
+[2026-04-11 01:30:18]   Sending to model (5 messages)...
+[2026-04-11 01:49:34]   Received response in 1156.5s
+[2026-04-11 01:49:34]   Finish reason: stop
+[2026-04-11 01:49:34]   Tokens — prompt: 11958, completion: 6874, total: 18832
+[2026-04-11 01:49:34]   Saved raw response + extracted files: ['unnamed_1.c', 'unnamed_2.c', 'unnamed_3.c', 'av1_gpu_thread.h', 'av1_gpu_thread.c', 'test_gpu_thread.c']
+[2026-04-11 01:49:34]   Verification checklist for Prompt 8:
+[2026-04-11 01:49:34]     [ ] Thread starts and stops cleanly
+[2026-04-11 01:49:34]     [ ] Jobs complete in FIFO order
+[2026-04-11 01:49:34]     [ ] Stub delay works (each job takes ~1ms)
+[2026-04-11 01:49:34]     [ ] Clean shutdown with in-flight jobs
+[2026-04-11 01:49:34]     [ ] Comments clearly mark all GPU_IMPL extension points
+[2026-04-11 01:49:34]     [ ] Film grain + format conversion + direct-to-dst path is documented
+[2026-04-11 01:49:34] 
+[2026-04-11 01:49:34] ============================================================
+[2026-04-11 01:49:34] PROMPT 9: End-to-End Integration Test
+[2026-04-11 01:49:34] ============================================================
+[2026-04-11 01:49:34]   Injecting prior output: Prompt 1 (malloc_override) — 26906 chars
+[2026-04-11 01:49:34]   Injecting prior output: Prompt 2 (job_queue) — 14203 chars
+[2026-04-11 01:49:34]   Injecting prior output: Prompt 3 (query_create) — 40400 chars
+[2026-04-11 01:49:34]   Injecting prior output: Prompt 4 (copy_thread) — 23313 chars
+[2026-04-11 01:49:34]   Injecting prior output: Prompt 5 (av1_decode) — 416 chars
+[2026-04-11 01:49:34]   Injecting prior output: Prompt 6 (sync_output) — 352 chars
+[2026-04-11 01:49:34]   Injecting prior output: Prompt 7 (flush_destroy) — 373 chars
+[2026-04-11 01:49:34]   Sending to model (15 messages)...
+[2026-04-11 02:19:34]   ✗ TIMEOUT after 1800.0s (limit: 1800s)
+[2026-04-11 02:19:34]   Skipping to next prompt. Re-run with: --only 9 --timeout 3600
+[2026-04-11 02:19:34] === Run complete ===
+[2026-04-11 02:19:34] Outputs saved to: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/prompt_outputs
+[2026-04-11 02:19:34] Log saved to: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/prompt_outputs/run_log.txt

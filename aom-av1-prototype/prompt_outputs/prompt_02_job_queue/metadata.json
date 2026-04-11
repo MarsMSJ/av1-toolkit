@@ -1,0 +1,33 @@
+{
+  "prompt_id": 2,
+  "prompt_name": "job_queue",
+  "timestamp": "2026-04-10T23:11:11.026718",
+  "elapsed_seconds": 693.5162796974182,
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 992,
+    "total_tokens": 5282,
+    "completion_tokens": 4290,
+    "prompt_tokens_details": null
+  },
+  "model": "MiniMax-M2.5",
+  "temperature": 0.2,
+  "max_tokens": 16384,
+  "extracted_files": [
+    "unnamed_1.c",
+    "unnamed_2.c",
+    "unnamed_3.c",
+    "av1_job_queue.h",
+    "av1_job_queue.c",
+    "test_job_queue.c"
+  ],
+  "checklist": [
+    "FIFO order preserved",
+    "Full detection works (push returns -1)",
+    "Timeout works (pop returns -1 after specified time)",
+    "Non-blocking poll (timeout=0) returns immediately",
+    "Two-thread stress test passes under ThreadSanitizer",
+    "Destroy cleans up mutex/condvar"
+  ],
+  "response_hash": "8c7088a25c751cb8"
+}
