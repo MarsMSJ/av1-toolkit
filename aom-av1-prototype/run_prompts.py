@@ -835,6 +835,8 @@ def send_prompt(base_url: str, model: str, system: str, messages: list,
         "max_tokens": max_tokens,
         "temperature": temperature,
         "stream": False,
+        "tool_choice": "none",   # disable tool calls for this request — server
+                                  # may have tools enabled for VS Code use
     }
     resp = requests.post(url, json=payload, timeout=timeout)
     resp.raise_for_status()
