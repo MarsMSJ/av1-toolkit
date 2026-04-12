@@ -1,0 +1,147 @@
+[2026-04-12 13:19:46] === VP9 Diff Analysis & Scrub Runner ===
+[2026-04-12 13:19:46] Base URL: http://192.168.1.120:8000/v1
+[2026-04-12 13:19:46] Model: MiniMax-M2.5
+[2026-04-12 13:19:46] Output dir: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/vp9_analysis_outputs
+[2026-04-12 13:19:46] Proprietary prefixes: ['lux_', 'sce_']
+[2026-04-12 13:19:46] Proprietary terms: []
+[2026-04-12 13:19:46] Progress: 0/2 stages completed previously
+[2026-04-12 13:19:46] 
+[2026-04-12 13:19:46] ============================================================
+[2026-04-12 13:19:46] STAGE 1: VP9 Diff Analysis
+[2026-04-12 13:19:46] ============================================================
+[2026-04-12 13:19:46]   libvpx files loaded: 13
+[2026-04-12 13:19:46]     vpx/vpx_decoder.h (15,377 chars)
+[2026-04-12 13:19:46]     vpx/vpx_codec.h (16,104 chars)
+[2026-04-12 13:19:46]     vpx_mem/vpx_mem.h (1,185 chars)
+[2026-04-12 13:19:46]     vpx_mem/vpx_mem.c (2,610 chars)
+[2026-04-12 13:19:46]     vp9/common/vp9_common.h (1,809 chars)
+[2026-04-12 13:19:46]     vp9/decoder/vp9_decoder.h (5,926 chars)
+[2026-04-12 13:19:46]     vp9/decoder/vp9_decoder.c (19,627 chars)
+[2026-04-12 13:19:46]     vp9/decoder/vp9_decodeframe.h (1,095 chars)
+[2026-04-12 13:19:46]     vp9/decoder/vp9_decodeframe.c (30,037 chars)
+[2026-04-12 13:19:46]     vpx_util/vpx_thread.h (3,945 chars)
+[2026-04-12 13:19:46]     vpx_util/vpx_thread.c (7,665 chars)
+[2026-04-12 13:19:46]     vp9/common/vp9_alloccommon.h (1,584 chars)
+[2026-04-12 13:19:46]     vp9/common/vp9_alloccommon.c (5,943 chars)
+[2026-04-12 13:19:46]   Custom VP9 files discovered: 60
+[2026-04-12 13:19:46]     aom-av1-prototype/prompt_outputs/prompt_03_query_create/av1_decoder_api.c (21,135 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/prompt_outputs/prompt_05_av1_decode/av1_decoder_api.c (27,027 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/prompt_outputs/prompt_05_av1_decode/test_av1_decode.c (12,851 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/prompt_outputs/prompt_06_sync_output/av1_decoder_api.c (30,037 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/prompt_outputs/prompt_07_flush_destroy/av1_decoder_api.c (30,037 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/review_outputs/av1_decoder_api_lifecycle/av1_decoder_api.c (12,818 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/review_outputs/av1_decoder_api_output_pipeline/av1_decoder_api.c (9,518 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/merge/av1_decoder_api.c (30,037 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/review_03_query_create/av1_decoder_api.c (22,483 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/review_05_av1_decode/av1_decoder_api.c (27,980 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/review_05_av1_decode/test_av1_decode.c (12,852 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/review_06_sync_output/av1_decoder_api.c (30,037 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/review_07_flush_destroy/av1_decoder_api.c (30,037 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/prompt_outputs/prompt_03_query_create/av1_decoder_api.h (5,342 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/prompt_outputs/prompt_05_av1_decode/av1_decoder_api.h (7,786 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/prompt_outputs/prompt_06_sync_output/av1_decoder_api.h (11,276 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/prompt_outputs/prompt_07_flush_destroy/av1_decoder_api.h (12,062 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/consistency/av1_decoder_api.h (12,325 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/merge/av1_decoder_api.h (12,062 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/prompt_outputs/prompt_04_copy_thread/av1_copy_thread.c (8,185 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/prompt_outputs/prompt_04_copy_thread/test_copy_thread.c (12,370 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/prompt_outputs/prompt_08_gpu_thread_stub/av1_gpu_thread.c (11,138 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/prompt_outputs/prompt_08_gpu_thread_stub/test_gpu_thread.c (8,261 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/review_outputs/av1_copy_thread/av1_copy_thread.c (8,236 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/review_outputs/av1_gpu_thread/av1_gpu_thread.c (5,932 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/merge/av1_copy_thread.c (8,236 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/merge/av1_gpu_thread.c (5,932 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/merge/test_copy_thread.c (4,195 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/merge/test_gpu_thread.c (2,280 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/review_04_copy_thread/av1_copy_thread.c (7,922 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/review_04_copy_thread/test_copy_thread.c (11,616 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/review_08_gpu_thread_stub/av1_gpu_thread.c (11,039 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/review_08_gpu_thread_stub/test_gpu_thread.c (10,115 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/prompt_outputs/prompt_04_copy_thread/av1_copy_thread.h (2,661 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/prompt_outputs/prompt_08_gpu_thread_stub/av1_gpu_thread.h (5,772 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/review_outputs/av1_gpu_thread/av1_gpu_thread.h (4,048 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/merge/av1_copy_thread.h (2,661 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/merge/av1_gpu_thread.h (4,048 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/review_04_copy_thread/av1_copy_thread.h (2,661 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/prompt_outputs/prompt_02_job_queue/av1_job_queue.c (3,848 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/prompt_outputs/prompt_02_job_queue/test_job_queue.c (8,123 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/review_outputs/av1_job_queue/av1_job_queue.c (3,507 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/merge/av1_job_queue.c (3,507 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/merge/test_job_queue.c (5,013 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/review_02_job_queue/test_job_queue.c (8,184 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/prompt_outputs/prompt_02_job_queue/av1_job_queue.h (2,141 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/merge/av1_job_queue.h (923 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/prompt_outputs/prompt_01_malloc_override/av1_mem_override.c (13,557 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/prompt_outputs/prompt_01_malloc_override/test_mem_override.c (10,847 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/review_outputs/av1_mem_override/av1_mem_override.c (11,915 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/merge/av1_mem_override.c (11,915 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/merge/test_mem_override.c (4,677 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/review_01_malloc_override/av1_mem_override.c (14,883 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/review_01_malloc_override/test_mem_override.c (12,330 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/prompt_outputs/prompt_01_malloc_override/av1_mem_override.h (2,402 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/review_outputs/av1_mem_override/av1_mem_override.h (1,492 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/merge/av1_mem_override.h (1,492 chars)
+[2026-04-12 13:19:46]     aom-av1-prototype/verification_outputs/review_01_malloc_override/av1_mem_override.h (2,474 chars)
+[2026-04-12 13:19:46]     include/av1_dpb_manager.h (12,265 chars)
+[2026-04-12 13:19:46]     include/av1_dpb_support.h (3,772 chars)
+[2026-04-12 13:19:46]   Input: 1 messages, ~753,731 chars (~251,243 tokens)
+[2026-04-12 13:19:47]   ✗ ERROR: HTTPError: 400 Client Error: Bad Request for url: http://192.168.1.120:8000/v1/chat/completions
+[2026-04-12 13:19:47] 
+[2026-04-12 13:19:47] ============================================================
+[2026-04-12 13:19:47] STAGE 2: Scrub Report
+[2026-04-12 13:19:47] ============================================================
+[2026-04-12 13:19:47]   ✗ ERROR: No raw report found from Stage 1
+[2026-04-12 13:19:47]     Expected: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/vp9_analysis_outputs/vp9_diff_analysis/raw_response.md
+[2026-04-12 13:19:47]     Run Stage 1 first, or place the raw report at the path above.
+[2026-04-12 13:19:47] 
+[2026-04-12 13:19:47] === VP9 analysis complete ===
+[2026-04-12 13:19:47] Progress: 0/2 stages completed
+[2026-04-12 13:19:47] Outputs: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/vp9_analysis_outputs
+[2026-04-12 13:19:47] Progress file: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/vp9_analysis_outputs/vp9_progress.md
+[2026-04-12 13:21:50] === VP9 Diff Analysis & Scrub Runner ===
+[2026-04-12 13:21:50] Base URL: http://192.168.1.120:8000/v1
+[2026-04-12 13:21:50] Model: MiniMax-M2.5
+[2026-04-12 13:21:50] Output dir: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/vp9_analysis_outputs
+[2026-04-12 13:21:50] Proprietary prefixes: ['lux_', 'sce_']
+[2026-04-12 13:21:50] Proprietary terms: []
+[2026-04-12 13:21:50] Progress: 0/2 stages completed previously
+[2026-04-12 13:21:50] 
+[2026-04-12 13:21:50] ============================================================
+[2026-04-12 13:21:50] STAGE 1: VP9 Diff Analysis
+[2026-04-12 13:21:50] ============================================================
+[2026-04-12 13:21:50]   libvpx files loaded: 13
+[2026-04-12 13:21:50]     vpx/vpx_decoder.h (15,377 chars)
+[2026-04-12 13:21:50]     vpx/vpx_codec.h (16,104 chars)
+[2026-04-12 13:21:50]     vpx_mem/vpx_mem.h (1,185 chars)
+[2026-04-12 13:21:50]     vpx_mem/vpx_mem.c (2,610 chars)
+[2026-04-12 13:21:50]     vp9/common/vp9_common.h (1,809 chars)
+[2026-04-12 13:21:50]     vp9/decoder/vp9_decoder.h (5,926 chars)
+[2026-04-12 13:21:50]     vp9/decoder/vp9_decoder.c (19,627 chars)
+[2026-04-12 13:21:50]     vp9/decoder/vp9_decodeframe.h (1,095 chars)
+[2026-04-12 13:21:50]     vp9/decoder/vp9_decodeframe.c (30,037 chars)
+[2026-04-12 13:21:50]     vpx_util/vpx_thread.h (3,945 chars)
+[2026-04-12 13:21:50]     vpx_util/vpx_thread.c (7,665 chars)
+[2026-04-12 13:21:50]     vp9/common/vp9_alloccommon.h (1,584 chars)
+[2026-04-12 13:21:50]     vp9/common/vp9_alloccommon.c (5,943 chars)
+[2026-04-12 13:21:50]   Custom VP9 files discovered: 4
+[2026-04-12 13:21:50]     16_plan_internals.md (3,518 chars)
+[2026-04-12 13:21:50]     17_compile_final_plan.md (15,249 chars)
+[2026-04-12 13:21:50]     18_final_review.md (3,543 chars)
+[2026-04-12 13:21:50]     av1_tile_dec_unit.h (3,011 chars)
+[2026-04-12 13:21:50]   Input: 1 messages, ~139,781 chars (~46,593 tokens)
+[2026-04-12 13:49:39]   Response in 1668.5s — stop — tokens: 47698
+[2026-04-12 13:49:39]   Saved: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/vp9_analysis_outputs/vp9_diff_analysis/raw_response.md
+[2026-04-12 13:49:39] 
+[2026-04-12 13:49:39] ============================================================
+[2026-04-12 13:49:39] STAGE 2: Scrub Report
+[2026-04-12 13:49:39] ============================================================
+[2026-04-12 13:49:39]   Raw report loaded: 27,677 chars
+[2026-04-12 13:49:39]   Input: 1 messages, ~29,412 chars (~9,804 tokens)
+[2026-04-12 14:07:40]   Response in 1080.9s — stop — tokens: 14840
+[2026-04-12 14:07:40]   Saved: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/vp9_analysis_outputs/scrub_report/raw_response.md
+[2026-04-12 14:07:40]   ✓ Scrub verification passed — no proprietary terms found
+[2026-04-12 14:07:40] 
+[2026-04-12 14:07:40] === VP9 analysis complete ===
+[2026-04-12 14:07:40] Progress: 2/2 stages completed
+[2026-04-12 14:07:40] Outputs: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/vp9_analysis_outputs
+[2026-04-12 14:07:40] Progress file: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/vp9_analysis_outputs/vp9_progress.md

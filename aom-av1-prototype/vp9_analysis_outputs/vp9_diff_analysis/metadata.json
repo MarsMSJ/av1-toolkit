@@ -1,0 +1,27 @@
+{
+  "stage": "vp9_diff_analysis",
+  "timestamp": "2026-04-12T13:49:39.114038",
+  "elapsed_seconds": 1668.511783361435,
+  "finish_reason": "stop",
+  "continuations": 0,
+  "usage": {
+    "prompt_tokens": 39329,
+    "total_tokens": 47698,
+    "completion_tokens": 8369,
+    "prompt_tokens_details": null
+  },
+  "completed_areas": [
+    "1. Public API Layer \u2014 analyzed",
+    "2. Memory Management \u2014 analyzed",
+    "3. Threading Architecture \u2014 analyzed",
+    "4. Decode Pipeline Split (Non-Blocking DECODE) \u2014 analyzed",
+    "5. Queue / Pipeline Management \u2014 analyzed",
+    "6. Reference Frame / DPB Changes \u2014 analyzed",
+    "7. Bitstream Parsing Changes \u2014 analyzed",
+    "8. Post-Processing / Filtering \u2014 analyzed",
+    "9. Output / Copy Path \u2014 analyzed",
+    "10. Error Handling & Edge Cases \u2014 analyzed"
+  ],
+  "pending_areas": [],
+  "response_hash": "c29b5a33080eb62b"
+}
