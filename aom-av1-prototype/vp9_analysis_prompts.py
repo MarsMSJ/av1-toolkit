@@ -71,26 +71,20 @@ LIBVPX_KEY_FILES = [
     "vp9/common/vp9_alloccommon.c",
 ]
 
-# Custom VP9 port — try to auto-discover, or specify with --custom-vp9-dir
+# Custom VP9 port — look for markdown/source files in the top-level dir only.
+# Use --custom-vp9-dir to point at the directory containing the 3 eval files.
 CUSTOM_VP9_GLOBS = [
-    "**/*decode*.c",
-    "**/*decode*.h",
-    "**/*thread*.c",
-    "**/*thread*.h",
-    "**/*queue*.c",
-    "**/*queue*.h",
-    "**/*mem*.c",
-    "**/*mem*.h",
-    "**/*api*.c",
-    "**/*api*.h",
-    "**/*dpb*.c",
-    "**/*dpb*.h",
-    "**/*copy*.c",
-    "**/*copy*.h",
+    "*.md",         # the 16_*, 17_*, 18_* evaluation prompts
+    "*.c",
+    "*.h",
 ]
 
 # Maximum chars from a single source file (to avoid blowing context)
 MAX_FILE_CHARS = 30000
+
+# Total budget for ALL source files combined (~60K tokens ≈ 180K chars).
+# MiniMax-M2.5 has ~197K context; leave room for system prompt + output.
+MAX_TOTAL_CHARS = 180000
 
 # ---------------------------------------------------------------------------
 # Proprietary prefix blocklist — EDIT BEFORE RUNNING
@@ -204,17 +198,28 @@ ANALYSIS_AREAS = [
 def build_diff_analysis_prompt(libvpx_files: dict, custom_files: dict) -> str:
     """Build the VP9 diff analysis prompt with injected source files."""
     parts = []
+    total_chars = 0
 
     parts.append("# VP9 Diff Analysis\n")
     parts.append("Compare the CUSTOM VP9 decoder against the libvpx REFERENCE.\n")
 
     parts.append("## Reference Codebase (libvpx)\n")
     for path, content in libvpx_files.items():
-        parts.append(f"### {path}\n```c\n{content}\n```\n")
+        block = f"### {path}\n```c\n{content}\n```\n"
+        if total_chars + len(block) > MAX_TOTAL_CHARS:
+            parts.append(f"### {path}\n_(skipped — context budget reached)_\n")
+            continue
+        total_chars += len(block)
+        parts.append(block)
 
     parts.append("## Custom VP9 Decoder\n")
     for path, content in custom_files.items():
-        parts.append(f"### {path}\n```c\n{content}\n```\n")
+        block = f"### {path}\n```c\n{content}\n```\n"
+        if total_chars + len(block) > MAX_TOTAL_CHARS:
+            parts.append(f"### {path}\n_(skipped — context budget reached)_\n")
+            continue
+        total_chars += len(block)
+        parts.append(block)
 
     parts.append("## Analysis Areas\n")
     parts.append("Analyze each of the following 10 areas. For each, describe "
@@ -313,12 +318,13 @@ def collect_files(base_dir: Path, key_files: list) -> dict:
 
 
 def discover_custom_files(base_dir: Path) -> dict:
-    """Auto-discover relevant files from the custom VP9 port."""
+    """Discover relevant files from the custom VP9 port (non-recursive)."""
     result = {}
     seen = set()
     for pattern in CUSTOM_VP9_GLOBS:
+        # Non-recursive: glob on the directory itself, not **
         for path in sorted(base_dir.glob(pattern)):
-            if path.is_file() and path.suffix in ('.c', '.h') and path not in seen:
+            if path.is_file() and path not in seen:
                 seen.add(path)
                 rel = str(path.relative_to(base_dir))
                 result[rel] = load_file(path)
