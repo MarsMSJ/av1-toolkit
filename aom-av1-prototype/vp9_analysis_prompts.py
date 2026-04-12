@@ -41,7 +41,7 @@ except ImportError:
 SCRIPT_DIR    = Path(__file__).parent.resolve()
 OUTPUT_DIR    = SCRIPT_DIR / "vp9_analysis_outputs"
 PROGRESS_FILE = "vp9_progress.md"
-MODEL_NAME    = "Qwen3-Coder-Next"
+MODEL_NAME    = "MiniMax-M2.5"
 MAX_TOKENS    = 16384
 TEMPERATURE   = 0.15
 REQUEST_TIMEOUT = 3600  # 1 hour per stage
