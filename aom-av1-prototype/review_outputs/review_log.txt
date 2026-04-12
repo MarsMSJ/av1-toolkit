@@ -95,93 +95,210 @@
 [2026-04-11 22:48:48] 
 [2026-04-11 22:48:48] === Review complete ===
 [2026-04-11 22:48:48] Outputs: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/review_outputs
-[2026-04-11 23:54:07] === AV1 Decoder Code Review Runner ===
-[2026-04-11 23:54:07] Base URL: http://192.168.1.120:8000/v1
-[2026-04-11 23:54:07] Model: MiniMax-M2.5
-[2026-04-11 23:54:07] Merge dir: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/verification_outputs/merge
-[2026-04-11 23:54:07] Output dir: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/review_outputs
-[2026-04-11 23:54:07] AOM base: /home/mars/dev-tools/aom
-[2026-04-11 23:54:07] Targets: ['av1_mem_override', 'av1_job_queue', 'av1_copy_thread', 'av1_gpu_thread', 'av1_decoder_api_helpers', 'av1_decoder_api_create', 'av1_decoder_api_lifecycle', 'av1_decoder_api_output_pipeline', 'ivf_parser', 'y4m_writer', 'test_e2e']
-[2026-04-11 23:54:07] Progress: 0/11 targets completed previously
-[2026-04-11 23:54:07] 
-[2026-04-11 23:54:07] ============================================================
-[2026-04-11 23:54:07] REVIEWING: av1_mem_override
-[2026-04-11 23:54:07] ============================================================
-[2026-04-11 23:54:07]   Input: 3 messages, ~18,491 chars (~6,163 tokens)
-[2026-04-12 00:12:42]   Response in 1114.9s — stop — tokens: 11537
-[2026-04-12 00:12:42]   Saved: ['av1_mem_override.c']
-[2026-04-12 00:12:42] 
-[2026-04-12 00:12:42] ============================================================
-[2026-04-12 00:12:42] REVIEWING: av1_job_queue
-[2026-04-12 00:12:42] ============================================================
-[2026-04-12 00:12:42]   Input: 1 messages, ~5,506 chars (~1,835 tokens)
-[2026-04-12 00:18:53]   Response in 370.6s — stop — tokens: 4345
-[2026-04-12 00:18:53]   Saved: ['unnamed_1.c']
-[2026-04-12 00:18:53] 
-[2026-04-12 00:18:53] ============================================================
-[2026-04-12 00:18:53] REVIEWING: av1_copy_thread
-[2026-04-12 00:18:53] ============================================================
-[2026-04-12 00:18:53]   Input: 3 messages, ~13,443 chars (~4,481 tokens)
-[2026-04-12 00:28:09]   Response in 556.6s — stop — tokens: 7158
-[2026-04-12 00:28:09]   Saved: ['av1_copy_thread.c']
-[2026-04-12 00:28:09] 
-[2026-04-12 00:28:09] ============================================================
-[2026-04-12 00:28:09] REVIEWING: av1_gpu_thread
-[2026-04-12 00:28:09] ============================================================
-[2026-04-12 00:28:09]   Input: 3 messages, ~11,223 chars (~3,741 tokens)
-[2026-04-12 00:41:17]   Response in 788.1s — stop — tokens: 8153
-[2026-04-12 00:41:17]   Saved: ['unnamed_1.c', 'unnamed_2.c', 'unnamed_3.c', 'unnamed_4.c']
-[2026-04-12 00:41:17] 
-[2026-04-12 00:41:17] ============================================================
-[2026-04-12 00:41:17] REVIEWING: av1_decoder_api_helpers
-[2026-04-12 00:41:17] ============================================================
-[2026-04-12 00:41:17]   Input: 3 messages, ~28,369 chars (~9,456 tokens)
-[2026-04-12 00:55:29]   Response in 851.6s — stop — tokens: 11962
-[2026-04-12 00:55:29]   Saved: ['unnamed_1.c']
-[2026-04-12 00:55:29] 
-[2026-04-12 00:55:29] ============================================================
-[2026-04-12 00:55:29] REVIEWING: av1_decoder_api_create
-[2026-04-12 00:55:29] ============================================================
-[2026-04-12 00:55:29]   Input: 3 messages, ~27,716 chars (~9,238 tokens)
-[2026-04-12 01:07:48]   Response in 739.4s — stop — tokens: 11149
-[2026-04-12 01:07:48]   Saved: ['unnamed_1.c']
-[2026-04-12 01:07:48] 
-[2026-04-12 01:07:48] ============================================================
-[2026-04-12 01:07:48] REVIEWING: av1_decoder_api_lifecycle
-[2026-04-12 01:07:48] ============================================================
-[2026-04-12 01:07:48]   Input: 3 messages, ~28,768 chars (~9,589 tokens)
-[2026-04-12 01:21:43]   Response in 834.4s — stop — tokens: 11864
-[2026-04-12 01:21:43]   Saved: ['av1_decoder_api.c']
-[2026-04-12 01:21:43] 
-[2026-04-12 01:21:43] ============================================================
-[2026-04-12 01:21:43] REVIEWING: av1_decoder_api_output_pipeline
-[2026-04-12 01:21:43] ============================================================
-[2026-04-12 01:21:43]   Input: 3 messages, ~27,003 chars (~9,001 tokens)
-[2026-04-12 01:33:15]   Response in 692.2s — stop — tokens: 11035
-[2026-04-12 01:33:15]   Saved: ['av1_decoder_api.c']
-[2026-04-12 01:33:15] 
-[2026-04-12 01:33:15] ============================================================
-[2026-04-12 01:33:15] REVIEWING: ivf_parser
-[2026-04-12 01:33:15] ============================================================
-[2026-04-12 01:33:15]   Input: 1 messages, ~7,804 chars (~2,601 tokens)
-[2026-04-12 01:44:32]   Response in 676.6s — stop — tokens: 6410
-[2026-04-12 01:44:32]   Saved: ['ivf_parser.c']
-[2026-04-12 01:44:32] 
-[2026-04-12 01:44:32] ============================================================
-[2026-04-12 01:44:32] REVIEWING: y4m_writer
-[2026-04-12 01:44:32] ============================================================
-[2026-04-12 01:44:32]   Input: 1 messages, ~6,972 chars (~2,324 tokens)
-[2026-04-12 02:01:17]   Response in 1005.4s — stop — tokens: 8267
-[2026-04-12 02:01:17]   Saved: ['y4m_writer.c']
-[2026-04-12 02:01:17] 
-[2026-04-12 02:01:17] ============================================================
-[2026-04-12 02:01:17] REVIEWING: test_e2e
-[2026-04-12 02:01:17] ============================================================
-[2026-04-12 02:01:17]   Input: 3 messages, ~27,312 chars (~9,104 tokens)
-[2026-04-12 02:17:49]   Response in 991.6s — stop — tokens: 12696
-[2026-04-12 02:17:49]   Saved: ['test_e2e.c']
-[2026-04-12 02:17:49] 
-[2026-04-12 02:17:49] === Review complete ===
-[2026-04-12 02:17:49] Progress: 11/11 targets completed
-[2026-04-12 02:17:49] Outputs: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/review_outputs
-[2026-04-12 02:17:49] Progress file: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/review_outputs/review_progress.md
+[2026-04-11 23:44:21] === AV1 Decoder Code Review Runner ===
+[2026-04-11 23:44:21] Base URL: http://192.168.1.120:8000/v1
+[2026-04-11 23:44:21] Model: MiniMax-M2.5
+[2026-04-11 23:44:21] Merge dir: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/verification_outputs/merge
+[2026-04-11 23:44:21] Output dir: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 23:44:21] AOM base: /Users/mars/workspace/av1-toolkit/aom
+[2026-04-11 23:44:21] Targets: ['av1_decoder_api_helpers']
+[2026-04-11 23:44:21] 
+[2026-04-11 23:44:21] ============================================================
+[2026-04-11 23:44:21] REVIEWING: av1_decoder_api_helpers
+[2026-04-11 23:44:21] ============================================================
+[2026-04-11 23:44:21]   Input: 3 messages, ~27,803 chars (~9,267 tokens)
+[2026-04-11 23:44:21]   [DRY RUN] skipping send
+[2026-04-11 23:44:21] 
+[2026-04-11 23:44:21] === Review complete ===
+[2026-04-11 23:44:21] Outputs: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 23:44:21] === AV1 Decoder Code Review Runner ===
+[2026-04-11 23:44:21] Base URL: http://192.168.1.120:8000/v1
+[2026-04-11 23:44:21] Model: MiniMax-M2.5
+[2026-04-11 23:44:21] Merge dir: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/verification_outputs/merge
+[2026-04-11 23:44:21] Output dir: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 23:44:21] AOM base: /Users/mars/workspace/av1-toolkit/aom
+[2026-04-11 23:44:21] Targets: ['av1_decoder_api_create']
+[2026-04-11 23:44:21] 
+[2026-04-11 23:44:21] ============================================================
+[2026-04-11 23:44:21] REVIEWING: av1_decoder_api_create
+[2026-04-11 23:44:21] ============================================================
+[2026-04-11 23:44:21]   Input: 3 messages, ~62,088 chars (~20,696 tokens)
+[2026-04-11 23:44:21]   [DRY RUN] skipping send
+[2026-04-11 23:44:21] 
+[2026-04-11 23:44:21] === Review complete ===
+[2026-04-11 23:44:21] Outputs: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 23:44:21] === AV1 Decoder Code Review Runner ===
+[2026-04-11 23:44:21] Base URL: http://192.168.1.120:8000/v1
+[2026-04-11 23:44:21] Model: MiniMax-M2.5
+[2026-04-11 23:44:21] Merge dir: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/verification_outputs/merge
+[2026-04-11 23:44:21] Output dir: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 23:44:21] AOM base: /Users/mars/workspace/av1-toolkit/aom
+[2026-04-11 23:44:21] Targets: ['av1_decoder_api_lifecycle']
+[2026-04-11 23:44:21] 
+[2026-04-11 23:44:21] ============================================================
+[2026-04-11 23:44:21] REVIEWING: av1_decoder_api_lifecycle
+[2026-04-11 23:44:21] ============================================================
+[2026-04-11 23:44:21]   Input: 3 messages, ~60,266 chars (~20,088 tokens)
+[2026-04-11 23:44:21]   [DRY RUN] skipping send
+[2026-04-11 23:44:21] 
+[2026-04-11 23:44:21] === Review complete ===
+[2026-04-11 23:44:21] Outputs: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 23:44:21] === AV1 Decoder Code Review Runner ===
+[2026-04-11 23:44:21] Base URL: http://192.168.1.120:8000/v1
+[2026-04-11 23:44:21] Model: MiniMax-M2.5
+[2026-04-11 23:44:21] Merge dir: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/verification_outputs/merge
+[2026-04-11 23:44:21] Output dir: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 23:44:21] AOM base: /Users/mars/workspace/av1-toolkit/aom
+[2026-04-11 23:44:21] Targets: ['av1_decoder_api_output_pipeline']
+[2026-04-11 23:44:21] 
+[2026-04-11 23:44:21] ============================================================
+[2026-04-11 23:44:21] REVIEWING: av1_decoder_api_output_pipeline
+[2026-04-11 23:44:21] ============================================================
+[2026-04-11 23:44:21]   Input: 3 messages, ~26,395 chars (~8,798 tokens)
+[2026-04-11 23:44:21]   [DRY RUN] skipping send
+[2026-04-11 23:44:21] 
+[2026-04-11 23:44:21] === Review complete ===
+[2026-04-11 23:44:21] Outputs: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 23:45:35] === AV1 Decoder Code Review Runner ===
+[2026-04-11 23:45:35] Base URL: http://192.168.1.120:8000/v1
+[2026-04-11 23:45:35] Model: MiniMax-M2.5
+[2026-04-11 23:45:35] Merge dir: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/verification_outputs/merge
+[2026-04-11 23:45:35] Output dir: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 23:45:35] AOM base: /Users/mars/workspace/av1-toolkit/aom
+[2026-04-11 23:45:35] Targets: ['av1_decoder_api_helpers']
+[2026-04-11 23:45:35] 
+[2026-04-11 23:45:35] ============================================================
+[2026-04-11 23:45:35] REVIEWING: av1_decoder_api_helpers
+[2026-04-11 23:45:35] ============================================================
+[2026-04-11 23:45:35]   Input: 3 messages, ~27,803 chars (~9,267 tokens)
+[2026-04-11 23:45:35]   [DRY RUN] skipping send
+[2026-04-11 23:45:35] 
+[2026-04-11 23:45:35] === Review complete ===
+[2026-04-11 23:45:35] Outputs: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 23:45:35] === AV1 Decoder Code Review Runner ===
+[2026-04-11 23:45:35] Base URL: http://192.168.1.120:8000/v1
+[2026-04-11 23:45:35] Model: MiniMax-M2.5
+[2026-04-11 23:45:35] Merge dir: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/verification_outputs/merge
+[2026-04-11 23:45:35] Output dir: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 23:45:35] AOM base: /Users/mars/workspace/av1-toolkit/aom
+[2026-04-11 23:45:35] Targets: ['av1_decoder_api_create']
+[2026-04-11 23:45:35] 
+[2026-04-11 23:45:35] ============================================================
+[2026-04-11 23:45:35] REVIEWING: av1_decoder_api_create
+[2026-04-11 23:45:35] ============================================================
+[2026-04-11 23:45:35]   Input: 3 messages, ~27,136 chars (~9,045 tokens)
+[2026-04-11 23:45:35]   [DRY RUN] skipping send
+[2026-04-11 23:45:35] 
+[2026-04-11 23:45:35] === Review complete ===
+[2026-04-11 23:45:35] Outputs: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 23:45:35] === AV1 Decoder Code Review Runner ===
+[2026-04-11 23:45:35] Base URL: http://192.168.1.120:8000/v1
+[2026-04-11 23:45:35] Model: MiniMax-M2.5
+[2026-04-11 23:45:35] Merge dir: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/verification_outputs/merge
+[2026-04-11 23:45:35] Output dir: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 23:45:35] AOM base: /Users/mars/workspace/av1-toolkit/aom
+[2026-04-11 23:45:35] Targets: ['av1_decoder_api_lifecycle']
+[2026-04-11 23:45:35] 
+[2026-04-11 23:45:35] ============================================================
+[2026-04-11 23:45:35] REVIEWING: av1_decoder_api_lifecycle
+[2026-04-11 23:45:35] ============================================================
+[2026-04-11 23:45:35]   Input: 3 messages, ~28,174 chars (~9,391 tokens)
+[2026-04-11 23:45:35]   [DRY RUN] skipping send
+[2026-04-11 23:45:35] 
+[2026-04-11 23:45:35] === Review complete ===
+[2026-04-11 23:45:35] Outputs: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 23:45:35] === AV1 Decoder Code Review Runner ===
+[2026-04-11 23:45:35] Base URL: http://192.168.1.120:8000/v1
+[2026-04-11 23:45:35] Model: MiniMax-M2.5
+[2026-04-11 23:45:35] Merge dir: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/verification_outputs/merge
+[2026-04-11 23:45:35] Output dir: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 23:45:35] AOM base: /Users/mars/workspace/av1-toolkit/aom
+[2026-04-11 23:45:35] Targets: ['av1_decoder_api_output_pipeline']
+[2026-04-11 23:45:35] 
+[2026-04-11 23:45:35] ============================================================
+[2026-04-11 23:45:35] REVIEWING: av1_decoder_api_output_pipeline
+[2026-04-11 23:45:35] ============================================================
+[2026-04-11 23:45:35]   Input: 3 messages, ~26,395 chars (~8,798 tokens)
+[2026-04-11 23:45:35]   [DRY RUN] skipping send
+[2026-04-11 23:45:35] 
+[2026-04-11 23:45:35] === Review complete ===
+[2026-04-11 23:45:35] Outputs: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 23:50:28] === AV1 Decoder Code Review Runner ===
+[2026-04-11 23:50:28] Base URL: http://192.168.1.120:8000/v1
+[2026-04-11 23:50:28] Model: MiniMax-M2.5
+[2026-04-11 23:50:28] Merge dir: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/verification_outputs/merge
+[2026-04-11 23:50:28] Output dir: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 23:50:28] AOM base: /Users/mars/workspace/av1-toolkit/aom
+[2026-04-11 23:50:28] Targets: ['av1_mem_override', 'av1_job_queue', 'av1_copy_thread', 'av1_gpu_thread', 'av1_decoder_api_helpers', 'av1_decoder_api_create', 'av1_decoder_api_lifecycle', 'av1_decoder_api_output_pipeline', 'ivf_parser', 'y4m_writer', 'test_e2e']
+[2026-04-11 23:50:28] Progress: 0/11 targets completed previously
+[2026-04-11 23:50:28] 
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28] REVIEWING: av1_mem_override
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28]   Input: 3 messages, ~18,491 chars (~6,163 tokens)
+[2026-04-11 23:50:28]   [DRY RUN] skipping send
+[2026-04-11 23:50:28] 
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28] REVIEWING: av1_job_queue
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28]   Input: 1 messages, ~4,982 chars (~1,660 tokens)
+[2026-04-11 23:50:28]   [DRY RUN] skipping send
+[2026-04-11 23:50:28] 
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28] REVIEWING: av1_copy_thread
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28]   Input: 3 messages, ~12,905 chars (~4,301 tokens)
+[2026-04-11 23:50:28]   [DRY RUN] skipping send
+[2026-04-11 23:50:28] 
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28] REVIEWING: av1_gpu_thread
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28]   Input: 3 messages, ~10,671 chars (~3,557 tokens)
+[2026-04-11 23:50:28]   [DRY RUN] skipping send
+[2026-04-11 23:50:28] 
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28] REVIEWING: av1_decoder_api_helpers
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28]   Input: 3 messages, ~27,803 chars (~9,267 tokens)
+[2026-04-11 23:50:28]   [DRY RUN] skipping send
+[2026-04-11 23:50:28] 
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28] REVIEWING: av1_decoder_api_create
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28]   Input: 3 messages, ~27,136 chars (~9,045 tokens)
+[2026-04-11 23:50:28]   [DRY RUN] skipping send
+[2026-04-11 23:50:28] 
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28] REVIEWING: av1_decoder_api_lifecycle
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28]   Input: 3 messages, ~28,174 chars (~9,391 tokens)
+[2026-04-11 23:50:28]   [DRY RUN] skipping send
+[2026-04-11 23:50:28] 
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28] REVIEWING: av1_decoder_api_output_pipeline
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28]   Input: 3 messages, ~26,395 chars (~8,798 tokens)
+[2026-04-11 23:50:28]   [DRY RUN] skipping send
+[2026-04-11 23:50:28] 
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28] REVIEWING: ivf_parser
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28]   Input: 1 messages, ~7,182 chars (~2,394 tokens)
+[2026-04-11 23:50:28]   [DRY RUN] skipping send
+[2026-04-11 23:50:28] 
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28] REVIEWING: y4m_writer
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28]   Input: 1 messages, ~6,336 chars (~2,112 tokens)
+[2026-04-11 23:50:28]   [DRY RUN] skipping send
+[2026-04-11 23:50:28] 
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28] REVIEWING: test_e2e
+[2026-04-11 23:50:28] ============================================================
+[2026-04-11 23:50:28]   Input: 3 messages, ~26,661 chars (~8,887 tokens)
+[2026-04-11 23:50:28]   [DRY RUN] skipping send
+[2026-04-11 23:50:28] 
+[2026-04-11 23:50:28] === Review complete ===
+[2026-04-11 23:50:28] Progress: 0/11 targets completed
+[2026-04-11 23:50:28] Outputs: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 23:50:28] Progress file: /Users/mars/workspace/av1-toolkit/aom-av1-prototype/review_outputs/review_progress.md
