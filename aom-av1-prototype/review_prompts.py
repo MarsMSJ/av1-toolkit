@@ -34,8 +34,11 @@ TEMPERATURE   = 0.15   # lower than generation — we want precise analysis
 REQUEST_TIMEOUT = 3600  # default 1 hour for all reviews
 
 AOM_BASE_DIR_CANDIDATES = [
+    SCRIPT_DIR.parent / "aom",                      # sibling to aom-av1-prototype/
+    SCRIPT_DIR.parent / "codec-dev-av1" / "aom",   # local checkout
     Path.home() / "dev-tools" / "av1-toolkit" / "aom",
-    SCRIPT_DIR.parent / "aom",
+    Path("/workspace/av1-toolkit/aom"),              # spark cluster
+    Path("/workspace/aom"),                          # spark alternative
 ]
 
 # ---------------------------------------------------------------------------
@@ -63,6 +66,33 @@ around the AOM reference decoder (libaom). Your job is to:
 
 Do NOT output tool calls. Do NOT rewrite files that have no bugs. \
 Focus on correctness over style.
+
+## Output format — use this exact structure
+
+Start your response with a markdown checklist of the focus areas you were asked \
+to review. Mark each as you complete it. This lets the runner track progress \
+if your output is interrupted and needs to be resumed.
+
+```
+## Progress
+- [x] Focus area 1 — checked, N bugs found
+- [x] Focus area 2 — checked, no bugs
+- [ ] Focus area 3 — not yet reviewed
+```
+
+Then for each completed focus area, write:
+
+```
+## Focus area N: <title>
+### Bug N.1: <short description>
+- **File**: filename.c, line ~NNN
+- **Problem**: ...
+- **Fix**: ...
+```
+
+Finally, output corrected files at the end (only files with bugs). \
+If you are interrupted mid-response, the checklist above tells the runner \
+which focus areas still need review.
 """
 
 # ---------------------------------------------------------------------------
@@ -354,6 +384,87 @@ def send_request(base_url, model, system, messages, max_tokens, temperature, tim
     return r.json()
 
 
+PROGRESS_FILE = "review_progress.md"
+MAX_CONTINUATIONS = 3  # max auto-resume attempts per target
+
+
+def load_progress(output_dir: Path) -> dict:
+    """Load progress tracker. Returns {target_name: {status, bugs, elapsed, ...}}."""
+    import re
+    path = output_dir / PROGRESS_FILE
+    if not path.exists():
+        return {}
+    progress = {}
+    for line in path.read_text().splitlines():
+        m = re.match(r'- \[([ xX])\] (\S+) — (.+)', line)
+        if m:
+            done = m.group(1).lower() == 'x'
+            name = m.group(2)
+            detail = m.group(3)
+            progress[name] = {"done": done, "detail": detail}
+    return progress
+
+
+def save_progress(output_dir: Path, progress: dict, all_targets: list):
+    """Write progress tracker as markdown checklist."""
+    lines = [
+        "# AV1 Decoder Code Review Progress\n",
+        f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
+        "## Targets\n",
+    ]
+    for t in all_targets:
+        name = t["name"]
+        info = progress.get(name)
+        if info and info["done"]:
+            lines.append(f"- [x] {name} — {info['detail']}")
+        elif info:
+            lines.append(f"- [ ] {name} — {info['detail']}")
+        else:
+            lines.append(f"- [ ] {name} — PENDING")
+    path = output_dir / PROGRESS_FILE
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def build_progress_header(progress: dict, all_targets: list) -> str:
+    """Build a short markdown summary to prepend to prompts."""
+    if not progress:
+        return ""
+    lines = ["## Overall review progress (for your context)\n"]
+    for t in all_targets:
+        name = t["name"]
+        info = progress.get(name)
+        if info and info["done"]:
+            lines.append(f"- [x] {name} — {info['detail']}")
+        elif info:
+            lines.append(f"- [ ] {name} — {info['detail']}")
+        else:
+            lines.append(f"- [ ] {name} — not yet started")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def parse_response_checklist(text: str) -> tuple:
+    """Parse the model's checklist to find completed/pending focus areas.
+    Returns (completed: list[str], pending: list[str])."""
+    import re
+    completed, pending = [], []
+    in_progress = False
+    for line in text.splitlines():
+        if line.strip().startswith("## Progress"):
+            in_progress = True
+            continue
+        if in_progress:
+            m = re.match(r'- \[([ xX])\] (.+)', line)
+            if m:
+                if m.group(1).lower() == 'x':
+                    completed.append(m.group(2))
+                else:
+                    pending.append(m.group(2))
+            elif line.strip() and not line.startswith('-'):
+                in_progress = False  # end of checklist
+    return completed, pending
+
+
 def extract_files(text: str, out_dir: Path):
     import re
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -417,6 +528,10 @@ def main():
         with open(log_path, "a") as f:
             f.write(line + "\n")
 
+    # Load or initialise overall progress
+    progress = load_progress(output_dir)
+    all_targets = REVIEW_TARGETS  # full list for progress display
+
     log("=== AV1 Decoder Code Review Runner ===")
     log(f"Base URL: {args.base_url}")
     log(f"Model: {args.model}")
@@ -424,11 +539,20 @@ def main():
     log(f"Output dir: {output_dir}")
     log(f"AOM base: {aom_base or 'NOT FOUND'}")
     log(f"Targets: {[t['name'] for t in targets]}")
+    done_count = sum(1 for v in progress.values() if v.get("done"))
+    log(f"Progress: {done_count}/{len(all_targets)} targets completed previously")
     log("")
 
     for target in targets:
         name = target["name"]
         out_dir = output_dir / name
+
+        # Skip already-completed targets (unless --only forces a re-run)
+        if not args.only and progress.get(name, {}).get("done"):
+            log(f"SKIPPING: {name} — already completed ({progress[name]['detail']})")
+            log("")
+            continue
+
         log(f"{'='*60}")
         log(f"REVIEWING: {name}")
         log(f"{'='*60}")
@@ -463,6 +587,9 @@ def main():
                 label = fname
             review_parts.append(f"### {label}\n```c\n{content}\n```")
 
+        # Build progress header for the model
+        progress_header = build_progress_header(progress, all_targets)
+
         messages = []
 
         if context_parts:
@@ -476,7 +603,8 @@ def main():
             })
 
         review_body = (
-            f"Please review the following generated C code for the AV1 decoder API.\n\n"
+            progress_header
+            + f"Please review the following generated C code for the AV1 decoder API.\n\n"
             f"## Files to review\n\n"
             + "\n\n".join(review_parts)
             + "\n\n## Focus areas\n\n"
@@ -499,52 +627,142 @@ def main():
             continue
 
         effective_timeout = target.get("timeout_override", args.timeout)
-        start = time.time()
-        try:
-            resp = send_request(
-                args.base_url, args.model, SYSTEM_PROMPT, messages,
-                args.max_tokens, args.temperature, effective_timeout
-            )
-            elapsed = time.time() - start
-            choice = resp["choices"][0]
-            text = choice["message"]["content"]
-            finish = choice.get("finish_reason", "?")
-            usage = resp.get("usage", {})
 
-            log(f"  Response in {elapsed:.1f}s — {finish} — "
-                f"tokens: {usage.get('total_tokens', '?')}")
+        # --- Send with auto-continuation on truncation ---
+        accumulated_text = ""
+        attempt = 0
+        final_finish = None
+        final_usage = {}
+        total_elapsed = 0.0
 
-            if finish == "length":
-                log(f"  ⚠ TRUNCATED — re-run with --max-tokens {args.max_tokens * 2}")
+        while attempt <= MAX_CONTINUATIONS:
+            current_messages = list(messages)  # copy
 
-            saved = extract_files(text, out_dir)
+            # If continuing a truncated response, append prior output + continue prompt
+            if attempt > 0:
+                log(f"  Continuation attempt {attempt}/{MAX_CONTINUATIONS}...")
+                completed, pending = parse_response_checklist(accumulated_text)
+                log(f"    Completed focus areas: {len(completed)}, Pending: {len(pending)}")
+
+                if not pending:
+                    log(f"    All focus areas done — just needs corrected files.")
+                    continue_prompt = (
+                        "Your previous response was truncated. The checklist shows all "
+                        "focus areas are reviewed. Please output ONLY the corrected "
+                        "file(s) using ### filename.ext fenced code blocks."
+                    )
+                else:
+                    pending_list = "\n".join(f"- {p}" for p in pending)
+                    continue_prompt = (
+                        f"Your previous response was truncated. You completed "
+                        f"{len(completed)} of {len(completed)+len(pending)} focus areas.\n\n"
+                        f"**Remaining focus areas:**\n{pending_list}\n\n"
+                        f"Please continue reviewing the remaining areas, then output "
+                        f"corrected file(s) using ### filename.ext fenced code blocks."
+                    )
+
+                current_messages.append({
+                    "role": "assistant",
+                    "content": accumulated_text
+                })
+                current_messages.append({
+                    "role": "user",
+                    "content": continue_prompt
+                })
+
+            start = time.time()
+            try:
+                resp = send_request(
+                    args.base_url, args.model, SYSTEM_PROMPT, current_messages,
+                    args.max_tokens, args.temperature, effective_timeout
+                )
+                elapsed = time.time() - start
+                total_elapsed += elapsed
+                choice = resp["choices"][0]
+                text = choice["message"]["content"]
+                finish = choice.get("finish_reason", "?")
+                usage = resp.get("usage", {})
+                final_finish = finish
+                final_usage = usage
+
+                log(f"  Response in {elapsed:.1f}s — {finish} — "
+                    f"tokens: {usage.get('total_tokens', '?')}")
+
+                accumulated_text += ("\n" if accumulated_text else "") + text
+
+                if finish == "length" and attempt < MAX_CONTINUATIONS:
+                    log(f"  ⚠ TRUNCATED — will auto-continue")
+                    attempt += 1
+                    continue
+                elif finish == "length":
+                    log(f"  ⚠ TRUNCATED — max continuations reached, saving partial")
+                break
+
+            except requests.exceptions.Timeout:
+                total_elapsed += time.time() - start
+                log(f"  ✗ TIMEOUT after {time.time()-start:.0f}s")
+                progress[name] = {"done": False, "detail": f"TIMEOUT ({total_elapsed:.0f}s)"}
+                save_progress(output_dir, progress, all_targets)
+                break
+            except requests.exceptions.ConnectionError as e:
+                log(f"  ✗ CONNECTION ERROR: {e}")
+                sys.exit(1)
+            except requests.exceptions.HTTPError as e:
+                log(f"  ✗ HTTP ERROR: {e}")
+                progress[name] = {"done": False, "detail": f"HTTP ERROR"}
+                save_progress(output_dir, progress, all_targets)
+                break
+            except Exception as e:
+                log(f"  ✗ ERROR: {type(e).__name__}: {e}")
+                progress[name] = {"done": False, "detail": f"ERROR: {e}"}
+                save_progress(output_dir, progress, all_targets)
+                break
+        else:
+            # while-else: only runs if loop completed without break
+            pass
+
+        # Save accumulated output
+        if accumulated_text:
+            saved = extract_files(accumulated_text, out_dir)
             log(f"  Saved: {saved if saved else ['raw_response.md only']}")
+
+            # Count bugs from checklist
+            completed, pending = parse_response_checklist(accumulated_text)
+            bug_summary = f"{len(completed)} areas reviewed"
+            if pending:
+                bug_summary += f", {len(pending)} incomplete"
 
             meta = {
                 "target": name,
                 "timestamp": datetime.now().isoformat(),
-                "elapsed_seconds": elapsed,
-                "finish_reason": finish,
-                "usage": usage,
+                "elapsed_seconds": total_elapsed,
+                "finish_reason": final_finish,
+                "continuations": attempt,
+                "usage": final_usage,
                 "corrected_files": saved,
-                "response_hash": hashlib.sha256(text.encode()).hexdigest()[:16],
+                "completed_areas": completed,
+                "pending_areas": pending,
+                "response_hash": hashlib.sha256(accumulated_text.encode()).hexdigest()[:16],
             }
             (out_dir / "metadata.json").write_text(json.dumps(meta, indent=2))
 
-        except requests.exceptions.Timeout:
-            log(f"  ✗ TIMEOUT after {time.time()-start:.0f}s")
-        except requests.exceptions.ConnectionError as e:
-            log(f"  ✗ CONNECTION ERROR: {e}")
-            sys.exit(1)
-        except requests.exceptions.HTTPError as e:
-            log(f"  ✗ HTTP ERROR: {e}")
-        except Exception as e:
-            log(f"  ✗ ERROR: {type(e).__name__}: {e}")
+            is_done = final_finish in ("stop", "end_turn") or (not pending and completed)
+            progress[name] = {
+                "done": is_done,
+                "detail": f"DONE ({bug_summary}, {total_elapsed:.0f}s)" if is_done
+                         else f"PARTIAL ({bug_summary}, {total_elapsed:.0f}s)",
+            }
+        else:
+            progress[name] = {"done": False, "detail": "NO RESPONSE"}
 
+        save_progress(output_dir, progress, all_targets)
         log("")
 
     log("=== Review complete ===")
+    done_count = sum(1 for v in progress.values() if v.get("done"))
+    log(f"Progress: {done_count}/{len(all_targets)} targets completed")
     log(f"Outputs: {output_dir}")
+    log(f"Progress file: {output_dir / PROGRESS_FILE}")
 
 
 if __name__ == "__main__":
