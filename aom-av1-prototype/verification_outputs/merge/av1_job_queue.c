@@ -65,14 +65,16 @@ int av1_frame_queue_pop(Av1FrameQueue *q, Av1FrameEntry *out, uint32_t timeout_u
 
     pthread_mutex_lock(&q->mutex);
 
-    if (q->count == 0) {
+    /* Bug fix: Use while loop to handle spurious wakeups */
+    while (q->count == 0) {
         if (timeout_us == 0) {
             pthread_mutex_unlock(&q->mutex);
             return -1;
         }
 
         struct timespec ts;
-        if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
+        /* Bug fix: Use CLOCK_MONOTONIC instead of CLOCK_REALTIME */
+        if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
             pthread_mutex_unlock(&q->mutex);
             return -1;
         }
@@ -93,10 +95,7 @@ int av1_frame_queue_pop(Av1FrameQueue *q, Av1FrameEntry *out, uint32_t timeout_u
             return -1;
         }
 
-        if (q->count == 0) {
-            pthread_mutex_unlock(&q->mutex);
-            return -1;
-        }
+        /* Loop back to re-check count - handles spurious wakeups */
     }
 
     memcpy(out, &q->entries[q->head], sizeof(*out));
@@ -136,6 +135,10 @@ void av1_frame_queue_destroy(Av1FrameQueue *q) {
     if (!q) {
         return;
     }
+
+    /* Bug fix: Signal all waiting threads before destroying to avoid deadlock */
+    pthread_cond_broadcast(&q->not_full);
+    pthread_cond_broadcast(&q->not_empty);
 
     pthread_cond_destroy(&q->not_full);
     pthread_cond_destroy(&q->not_empty);

@@ -139,16 +139,34 @@ static size_t calculate_frame_buffer_size(int width, int height, int bit_depth,
     // Bytes per pixel
     int bytes_per_pixel = (bit_depth > 8) ? 2 : 1;
     
-    // Chroma factor
-    double chroma_factor;
+    // Calculate luma size (full padded dimensions)
+    size_t luma_size = (size_t)padded_width * padded_height * bytes_per_pixel;
+    
+    // Calculate chroma sizes with proper subsampling
+    size_t chroma_size = 0;
     switch (chroma_subsampling) {
-        case 2: chroma_factor = 3.0; break;   // 444
-        case 1: chroma_factor = 2.0; break;   // 422
-        default: chroma_factor = 1.5; break;  // 420
+        case 2: // 444 - chroma same dimensions as luma
+            chroma_size = luma_size * 2;  // U + V planes
+            break;
+        case 1: // 422 - chroma half width, full height
+        {
+            int chroma_width = padded_width / 2;
+            size_t chroma_plane_size = (size_t)chroma_width * padded_height * bytes_per_pixel;
+            chroma_size = chroma_plane_size * 2;  // U + V planes
+            break;
+        }
+        default: // 420 - chroma half width, half height
+        {
+            int chroma_width = padded_width / 2;
+            int chroma_height = padded_height / 2;
+            size_t chroma_plane_size = (size_t)chroma_width * chroma_height * bytes_per_pixel;
+            chroma_size = chroma_plane_size * 2;  // U + V planes
+            break;
+        }
     }
     
     // Total size
-    size_t size = (size_t)padded_width * padded_height * bytes_per_pixel * (size_t)chroma_factor;
+    size_t size = luma_size + chroma_size;
     
     // Add some overhead for alignment and additional planes
     size = (size + 4095) & ~4095;  // 4KB alignment
@@ -374,6 +392,7 @@ static void *gpu_thread_func(void *arg) {
 // API Implementation
 // ============================================================================
 
+
 Av1MemoryRequirements av1_query_memory(const Av1StreamInfo *info, 
                                         int queue_depth, 
                                         int num_workers) {
@@ -478,6 +497,13 @@ Av1Decoder *av1_create_decoder(const Av1DecoderConfig *config) {
         return NULL;
     }
     
+    // BUG FIX 4.1: Validate memory base alignment
+    if (((uintptr_t)config->memory_base % req.alignment) != 0) {
+        fprintf(stderr, "av1_create_decoder: memory base not aligned to %zu bytes\n",
+                req.alignment);
+        return NULL;
+    }
+    
     // Initialize memory allocator
     if (!av1_mem_init(config->memory_base, config->memory_size)) {
         fprintf(stderr, "av1_create_decoder: failed to initialize memory allocator\n");
@@ -531,8 +557,13 @@ Av1Decoder *av1_create_decoder(const Av1DecoderConfig *config) {
         aom_config.init_flags |= AOM_CODEC_USE_THREADS;
     }
     
-    // Initialize AOM decoder
-    aom_codec_err_t aom_err = aom_codec_init(&aom_codec_av1_dx, &aom_config, &decoder->aom_decoder);
+    // BUG FIX 1.1: Use correct AOM decoder initialization function
+    // aom_codec_dec_init_ver() is the proper API for decoder initialization
+    aom_codec_err_t aom_err = aom_codec_dec_init_ver(&decoder->aom_decoder, 
+                                                      &aom_codec_av1_dx, 
+                                                      &aom_config, 
+                                                      aom_config.init_flags, 
+                                                      AOM_DECODER_ABI_VERSION);
     if (aom_err != AOM_CODEC_OK) {
         fprintf(stderr, "av1_create_decoder: failed to initialize AOM decoder: %s\n",
                 aom_codec_error(&decoder->aom_decoder));
@@ -604,14 +635,23 @@ Av1Decoder *av1_create_decoder(const Av1DecoderConfig *config) {
             if (pthread_create(&decoder->workers[i].thread, NULL, 
                                worker_thread_func, &decoder->workers[i]) != 0) {
                 fprintf(stderr, "av1_create_decoder: failed to create worker %d\n", i);
+                // BUG FIX 3.1: Use graceful shutdown instead of pthread_cancel
+                // Signal all workers to stop and wait for them to exit cleanly
                 for (int j = 0; j < i; j++) {
-                    pthread_cancel(decoder->workers[j].thread);
+                    decoder->workers[j].running = false;
+                    // Signal any condition variables workers might be waiting on
+                    pthread_cond_broadcast(&decoder->decoder_cond);
+                }
+                // Now join all previously created workers
+                for (int j = 0; j < i; j++) {
                     pthread_join(decoder->workers[j].thread, NULL);
                 }
                 av1_mem_free(decoder->workers);
                 decoder->workers = NULL;
                 goto cleanup_copy_thread;
             }
+            // Mark worker as running after successful creation
+            decoder->workers[i].running = true;
         }
     }
     
@@ -685,7 +725,11 @@ cleanup_decoder:
 }
 
 // ============================================================================
-// av1_flush Implementation
+
+
+
+// ============================================================================
+// av1_flush Implementation (CORRECTED)
 // ============================================================================
 
 Av1DecodeResult av1_flush(Av1Decoder *decoder) {
@@ -711,6 +755,9 @@ Av1DecodeResult av1_flush(Av1Decoder *decoder) {
         // Ignore flush errors
     }
     
+    // Reset iterator for flush operation
+    decoder->aom_decoder.iter = NULL;
+    
     // Try to get any remaining frames from AOM
     aom_image_t *img;
     while ((img = aom_codec_get_frame(&decoder->aom_decoder, &decoder->aom_decoder.iter)) != NULL) {
@@ -732,11 +779,14 @@ Av1DecodeResult av1_flush(Av1Decoder *decoder) {
     printf("av1_flush: decoder flushed, ready queue has %d frames\n",
            av1_frame_queue_count(&decoder->ready_queue));
     
+    // FIX: Transition to READY state so decoder can still be used (or destroyed)
+    decoder->state = AV1_DECODER_STATE_READY;
+    
     return AV1_OK;
 }
 
 // ============================================================================
-// av1_destroy_decoder Implementation
+// av1_destroy_decoder Implementation (CORRECTED)
 // ============================================================================
 
 int av1_destroy_decoder(Av1Decoder *decoder) {
@@ -794,14 +844,8 @@ int av1_destroy_decoder(Av1Decoder *decoder) {
         }
     }
     
-    // Step 3: Signal and join copy thread
-    if (decoder->copy_thread) {
-        printf("av1_destroy_decoder: stopping copy thread\n");
-        av1_copy_thread_destroy(decoder->copy_thread);
-        decoder->copy_thread = NULL;
-    }
-    
-    // Step 4: Signal and join worker threads
+    // FIX: Step 3 - Signal and join worker threads BEFORE copy thread
+    // Workers may post to copy queue, so they must be stopped first
     if (decoder->workers) {
         printf("av1_destroy_decoder: stopping worker threads\n");
         for (int i = 0; i < decoder->num_workers; i++) {
@@ -812,6 +856,13 @@ int av1_destroy_decoder(Av1Decoder *decoder) {
         }
         av1_mem_free(decoder->workers);
         decoder->workers = NULL;
+    }
+    
+    // FIX: Step 4 - Signal and join copy thread AFTER workers
+    if (decoder->copy_thread) {
+        printf("av1_destroy_decoder: stopping copy thread\n");
+        av1_copy_thread_destroy(decoder->copy_thread);
+        decoder->copy_thread = NULL;
     }
     
     // Step 5: Signal and join GPU thread
@@ -856,53 +907,26 @@ int av1_destroy_decoder(Av1Decoder *decoder) {
         decoder->aom_decoder_initialized = false;
     }
     
-    // Step 10: Zero the decoder struct (security wipe)
+    // FIX: Step 10 - Zero the decoder struct (security wipe) - moved to AFTER all uses
     void *decoder_ptr = decoder;
     size_t decoder_size = sizeof(Av1Decoder);
     memset(decoder_ptr, 0, decoder_size);
     
-    // Step 11: Clear the memory pool flag (restore normal malloc)
+    // FIX: Step 11 - Clear the memory pool flag (restore normal malloc)
+    // Moved to AFTER memset so we can still use av1_mem_free if needed (but we use free here)
     av1_mem_set_override_enabled(false);
     av1_mem_shutdown();
     
     // Free decoder structure using standard free (not av1_mem_free since we disabled override)
     free(decoder);
     
-    printf("av1_destroy_decoder: complete\n");
+    // FIX: Removed printf after wipe since decoder is now zeroed
     
     return 0;
 }
 
-Av1DecoderState av1_get_decoder_state(const Av1Decoder *decoder) {
-    if (!decoder) {
-        return AV1_DECODER_STATE_UNINITIALIZED;
-    }
-    return decoder->state;
-}
-
-const Av1DecoderConfig *av1_get_decoder_config(const Av1Decoder *decoder) {
-    if (!decoder) {
-        return NULL;
-    }
-    return &decoder->config;
-}
-
-Av1MemStats av1_get_mem_stats(const Av1Decoder *decoder) {
-    Av1MemStats zero_stats = {0};
-    if (!decoder) {
-        return zero_stats;
-    }
-    return av1_mem_get_stats();
-}
-
-void av1_reset_mem_stats(Av1Decoder *decoder) {
-    if (decoder) {
-        av1_mem_reset_stats();
-    }
-}
-
 // ============================================================================
-// av1_decode Implementation
+// av1_decode Implementation (CORRECTED)
 // ============================================================================
 
 Av1DecodeResult av1_decode(Av1Decoder *decoder, 
@@ -970,6 +994,9 @@ Av1DecodeResult av1_decode(Av1Decoder *decoder,
     int dpb_slot = -1;
     uint32_t frame_id = 0;
     
+    // FIX: Reset iterator to NULL at start of frame retrieval
+    decoder->aom_decoder.iter = NULL;
+    
     // Get decoded frame from AOM
     aom_image_t *img = aom_codec_get_frame(&decoder->aom_decoder, &decoder->aom_decoder.iter);
     
@@ -988,14 +1015,37 @@ Av1DecodeResult av1_decode(Av1Decoder *decoder,
             return AV1_ERROR;
         }
         
-        // Copy frame data to DPB (simplified - real impl would use AOM's buffer)
+        // Copy frame data to DPB
         Av1DPBSlot *slot = &decoder->dpb[dpb_slot];
         
-        // For now, use the AOM image directly if available
+        // FIX: Copy all planes and metadata
+        // Store frame metadata
+        slot->width = img->w;
+        slot->height = img->h;
+        slot->stride[0] = img->stride[0];
+        slot->stride[1] = img->stride[1];
+        slot->stride[2] = img->stride[2];
+        slot->bit_depth = img->bit_depth;
+        slot->fmt = img->fmt;
+        
+        // Copy Y plane
         if (img->planes[0]) {
-            // Copy Y plane
             int y_size = img->stride[0] * img->h;
             memcpy(slot->planes[0], img->planes[0], y_size);
+        }
+        
+        // Copy U plane (stride[1] * ((h + 1) / 2) for 4:2:0)
+        if (img->planes[1]) {
+            int uv_height = (img->h + 1) / 2;
+            int u_size = img->stride[1] * uv_height;
+            memcpy(slot->planes[1], img->planes[1], u_size);
+        }
+        
+        // Copy V plane
+        if (img->planes[2]) {
+            int uv_height = (img->h + 1) / 2;
+            int v_size = img->stride[2] * uv_height;
+            memcpy(slot->planes[2], img->planes[2], v_size);
         }
         
         // Push to ready queue
@@ -1036,15 +1086,6 @@ Av1DecodeResult av1_decode(Av1Decoder *decoder,
     return AV1_OK;
 }
 
-// Legacy function - now just calls av1_flush
-Av1DecodeResult av1_decode_end(Av1Decoder *decoder) {
-    return av1_flush(decoder);
-}
-
-// ============================================================================
-// av1_sync Implementation
-// ============================================================================
-
 Av1DecodeResult av1_sync(Av1Decoder *decoder, 
                          uint32_t timeout_us,
                          Av1DecodeOutput *out_result) {
@@ -1064,9 +1105,13 @@ Av1DecodeResult av1_sync(Av1Decoder *decoder,
         }
     }
     
+    // FIX Bug 1.1: Map timeout=0 (infinite wait) to UINT32_MAX
+    // The API doc says 0 means infinite wait, but the queue treats 0 as non-blocking
+    uint32_t queue_timeout = (timeout_us == 0) ? UINT32_MAX : timeout_us;
+    
     // Pop from ready queue
     Av1FrameEntry entry;
-    int result = av1_frame_queue_pop(&decoder->ready_queue, &entry, timeout_us);
+    int result = av1_frame_queue_pop(&decoder->ready_queue, &entry, queue_timeout);
     
     if (result != 0) {
         // Timeout or error
@@ -1076,12 +1121,13 @@ Av1DecodeResult av1_sync(Av1Decoder *decoder,
         return AV1_NEED_MORE_DATA;
     }
     
+    // FIX Bug 4.1: Check add_pending_output result and return proper error code
     // Add to pending output table
     if (add_pending_output(decoder, entry.frame_id, entry.dpb_slot) != 0) {
-        fprintf(stderr, "av1_sync: failed to add to pending output\n");
+        fprintf(stderr, "av1_sync: failed to add to pending output (table full?)\n");
         // Put it back in queue
         av1_frame_queue_push(&decoder->ready_queue, &entry);
-        return AV1_ERROR;
+        return AV1_ERROR_QUEUE_FULL;
     }
     
     // Fill output result
@@ -1162,10 +1208,15 @@ Av1DecodeResult av1_set_output(Av1Decoder *decoder,
     copy_job->dst_strides[1] = output_buffer->strides[1];
     copy_job->dst_strides[2] = output_buffer->strides[2];
     
-    // Dimensions
-    copy_job->plane_widths[0] = output_buffer->widths[0];
-    copy_job->plane_widths[1] = output_buffer->widths[1];
-    copy_job->plane_widths[2] = output_buffer->widths[2];
+    // FIX Bug 2.1 & 2.2: Compute byte widths based on bit depth
+    // The plane_widths/plane_heights should be in bytes, not pixels
+    // For 8-bit: 1 byte per pixel
+    // For 10/12-bit: 2 bytes per pixel
+    int bytes_per_pixel = (output_buffer->bit_depth > 8) ? 2 : 1;
+    
+    copy_job->plane_widths[0] = output_buffer->widths[0] * bytes_per_pixel;
+    copy_job->plane_widths[1] = output_buffer->widths[1] * bytes_per_pixel;
+    copy_job->plane_widths[2] = output_buffer->widths[2] * bytes_per_pixel;
     copy_job->plane_heights[0] = output_buffer->heights[0];
     copy_job->plane_heights[1] = output_buffer->heights[1];
     copy_job->plane_heights[2] = output_buffer->heights[2];
@@ -1281,10 +1332,28 @@ Av1DecodeResult av1_release_frame(Av1Decoder *decoder, uint32_t frame_id) {
     // Find and release pending output
     Av1PendingOutput *pending = find_pending_output(decoder, frame_id);
     if (pending) {
-        release_dpb_slot(decoder, pending->dpb_slot);
+        // FIX Bug 3.1: Wait for copy job to complete before releasing DPB slot
+        // If there's an in-progress copy job, we must wait for it to finish
+        // to avoid use-after-free of the DPB buffer
         if (pending->copy_job) {
-            free(pending->copy_job);
+            // Wait for copy to complete (infinite wait since we're releasing resources)
+            int wait_result = av1_copy_thread_wait(decoder->copy_thread, pending->copy_job, UINT32_MAX);
+            if (wait_result != 0) {
+                fprintf(stderr, "av1_release_frame: warning - copy job did not complete\n");
+                // Continue anyway to avoid leak, but don't free copy_job
+            } else {
+                // Check status and free copy job only if successful
+                int status = av1_copy_thread_get_status(pending->copy_job);
+                if (status == AV1_COPY_COMPLETE) {
+                    free(pending->copy_job);
+                } else {
+                    fprintf(stderr, "av1_release_frame: warning - copy job failed (status=%d)\n", status);
+                }
+            }
+            pending->copy_job = NULL;
         }
+        
+        release_dpb_slot(decoder, pending->dpb_slot);
         remove_pending_output(decoder, frame_id);
     }
     

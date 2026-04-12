@@ -5,6 +5,9 @@
 #include <stdbool.h>
 #include <stdio.h>
 
+/* Forward declaration - actual definition must be provided by av1_decoder_api.h */
+struct Av1OutputBuffer;
+
 #ifdef __cplusplus
 extern "C" {
 #endif

@@ -136,13 +136,13 @@ int av1_copy_thread_wait(Av1CopyThread *ct, Av1CopyJob *job, uint32_t timeout_us
         return 0;
     }
     
-    if (current_status == AV1_COPY_IN_PROGRESS) {
-        /* Job is being processed, wait for completion */
+    /* Wait for job to transition from PENDING or IN_PROGRESS to COMPLETE */
+    if (current_status == AV1_COPY_PENDING || current_status == AV1_COPY_IN_PROGRESS) {
         if (timeout_us == 0) {
             /* Infinite wait */
-            while (atomic_load(&job->status) == AV1_COPY_IN_PROGRESS
-
-            pthread_cond_wait(&ct->job_complete, &ct->mutex);
+            while (atomic_load(&job->status) != AV1_COPY_COMPLETE) {
+                pthread_cond_wait(&ct->job_complete, &ct->mutex);
+            }
         } else {
             /* Timed wait */
             struct timespec ts;
@@ -155,7 +155,7 @@ int av1_copy_thread_wait(Av1CopyThread *ct, Av1CopyJob *job, uint32_t timeout_us
             ts.tv_sec += (int)(nsec / 1000000000ULL);
             ts.tv_nsec = (long)(nsec % 1000000000ULL);
             
-            while (atomic_load(&job->status) == AV1_COPY_IN_PROGRESS) {
+            while (atomic_load(&job->status) != AV1_COPY_COMPLETE) {
                 int ret = pthread_cond_timedwait(&ct->job_complete, &ct->mutex, &ts);
                 if (ret == ETIMEDOUT) {
                     pthread_mutex_unlock(&ct->mutex);

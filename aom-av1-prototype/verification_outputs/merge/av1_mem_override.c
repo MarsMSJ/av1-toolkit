@@ -31,6 +31,7 @@ typedef struct FreeBlock {
 } FreeBlock;
 
 typedef struct Av1MemHeader {
+    void *base;              /* BUG FIX: Store original base pointer */
     void *bump_ptr;
     void *bump_end;
     FreeBlock *free_list;
@@ -101,9 +102,16 @@ bool av1_mem_init(void *base, size_t size) {
         return false;
     }
     
+    /* BUG FIX: Handle re-initialization properly */
+    if (g_header_initialized) {
+        av1_mem_shutdown();
+    }
+    
     Av1MemHeader *header = (Av1MemHeader *)base;
     memset(header, 0, sizeof(Av1MemHeader));
     
+    /* BUG FIX: Store original base pointer */
+    header->base = base;
     header->bump_ptr = (char *)base + sizeof(Av1MemHeader);
     header->bump_end = (char *)base + size;
     header->free_list = NULL;
@@ -116,9 +124,11 @@ bool av1_mem_init(void *base, size_t size) {
     memset(&header->stats, 0, sizeof(Av1MemStats));
     header->stats.total_size = size;
     
+    /* BUG FIX: Set initialized flag after everything is ready */
     header->initialized = true;
     header->override_enabled = true;
     
+    /* BUG FIX: Use memcpy but now g_mem_header keeps reference to base */
     memcpy(&g_mem_header, header, sizeof(Av1MemHeader));
     g_header_initialized = true;
     
@@ -152,9 +162,25 @@ void *av1_mem_memalign(size_t alignment, size_t size) {
     if (alignment < MIN_ALIGNMENT) {
         alignment = MIN_ALIGNMENT;
     }
-    alignment = (alignment & (alignment - 1)) ? MIN_ALIGNMENT : alignment;
     
-    size_t aligned_size = align_size(size + sizeof(size_t), alignment);
+    /* BUG FIX: Correct power-of-2 check - if not power of 2, use MIN_ALIGNMENT */
+    if ((alignment & (alignment - 1)) != 0) {
+        alignment = MIN_ALIGNMENT;
+    }
+    
+    /* BUG FIX: Account for sizeof(size_t) in alignment calculation.
+     * We need to ensure the returned pointer is aligned after adding sizeof(size_t).
+     * The header stores size before the user pointer, so we need extra alignment. */
+    size_t size_t_size = sizeof(size_t);
+    size_t total_header_size = size_t_size;
+    
+    /* Ensure alignment is at least as large as size_t for proper alignment after offset */
+    if (alignment < size_t_size) {
+        alignment = size_t_size;
+    }
+    
+    /* Calculate aligned size including the size_t header */
+    size_t aligned_size = align_size(size + total_header_size, alignment);
     
     void *ptr = NULL;
     
@@ -198,7 +224,9 @@ void *av1_mem_memalign(size_t alignment, size_t size) {
     
     pthread_mutex_unlock(&g_mem_header.mutex);
     
-    return (char *)ptr + sizeof(size_t);
+    /* BUG FIX: Now the returned pointer is properly aligned because we accounted
+     * for sizeof(size_t) in the aligned_size calculation */
+    return (char *)ptr + total_header_size;
 }
 
 void *av1_mem_calloc(size_t num, size_t size) {
@@ -279,7 +307,17 @@ size_t av1_mem_query_size(const Av1StreamInfo *info, int queue_depth, int num_wo
     
     int64_t width = ALIGN64(info->width);
     int64_t height = ALIGN64(info->height);
-    int bps = info->max_bitrate > 0 ? info->max_bitrate : BITS_PER_PIXEL_8BIT;
+    
+    /* BUG FIX: Use is_16bit to determine bit depth, not max_bitrate.
+     * is_16bit=false means 8-bit, is_16bit=true means 10-bit or 12-bit.
+     * For more accurate sizing, we assume 12-bit for 16-bit mode as worst case. */
+    int bps;
+    if (info->is_16bit) {
+        /* For 16-bit mode, assume 12-bit as worst case for memory calculation */
+        bps = BITS_PER_PIXEL_12BIT;
+    } else {
+        bps = BITS_PER_PIXEL_8BIT;
+    }
     
     double chroma_factor;
     switch (info->chroma_subsampling) {
@@ -310,7 +348,8 @@ void *av1_mem_get_base(void) {
     if (!g_header_initialized) {
         return NULL;
     }
-    return &g_mem_header;
+    /* BUG FIX: Return the actual base pointer, not &g_mem_header */
+    return g_mem_header.base;
 }
 
 size_t av1_mem_get_total_size(void) {
@@ -329,6 +368,7 @@ void av1_mem_set_override_enabled(bool enabled) {
 }
 
 bool av1_mem_get_override_enabled(void) {
+    /* BUG FIX: Use double-checked locking pattern for thread safety */
     if (!g_header_initialized) {
         return false;
     }

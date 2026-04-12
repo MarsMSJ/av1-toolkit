@@ -18,19 +18,34 @@ struct Y4MWriter {
 };
 
 static const char* get_colorspace(int chroma_subsampling, int bit_depth) {
-    if (bit_depth > 8) {
+    if (bit_depth <= 8) {
+        switch (chroma_subsampling) {
+            case 0: return "420";
+            case 1: return "422";
+            case 2: return "444";
+            default: return "420";
+        }
+    } else if (bit_depth <= 10) {
         switch (chroma_subsampling) {
             case 0: return "420p10";
             case 1: return "422p10";
             case 2: return "444p10";
             default: return "420p10";
         }
-    } else {
+    } else if (bit_depth <= 12) {
         switch (chroma_subsampling) {
-            case 0: return "420";
-            case 1: return "422";
-            case 2: return "444";
-            default: return "420";
+            case 0: return "420p12";
+            case 1: return "422p12";
+            case 2: return "444p12";
+            default: return "420p12";
+        }
+    } else {
+        /* bit_depth > 12: assume 16-bit */
+        switch (chroma_subsampling) {
+            case 0: return "420p16";
+            case 1: return "422p16";
+            case 2: return "444p16";
+            default: return "420p16";
         }
     }
 }
@@ -65,7 +80,7 @@ Y4MWriter *y4m_writer_open(const char *filename, int width, int height,
     writer->valid = true;
     
     const char *colorspace = get_colorspace(chroma_subsampling, writer->bit_depth);
-    fprintf(writer->file, "YUV4MPEG2 W%d H%d F%d:%d C%s\n",
+    fprintf(writer->file, "YUV4MPEG2 W%d H%d F%d:%d Ip C%s\n",
             width, height, writer->fps_n, writer->fps_d, colorspace);
     
     return writer;

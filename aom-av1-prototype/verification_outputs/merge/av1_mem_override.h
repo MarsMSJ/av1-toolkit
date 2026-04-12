@@ -13,6 +13,7 @@ typedef struct Av1StreamInfo {
     int width;
     int height;
     int max_bitrate;
+    int bit_depth;           /* BUG FIX: Added missing bit_depth field */
     int chroma_subsampling;
     bool is_16bit;
 } Av1StreamInfo;

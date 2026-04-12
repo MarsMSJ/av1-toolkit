@@ -6,13 +6,17 @@
 #include <stdio.h>
 #include <unistd.h>
 
+/* Note: If AV1_MEM_OVERRIDE is defined, applications can provide custom
+ * memory allocation via av1_mem_malloc/av1_mem_free. This allows the decoder
+ * to use memory from specific pools (e.g., DMA-able memory for GPU access).
+ * For this stub implementation, we use system malloc since no GPU memory
+ * pool is required. When GPU memory management is added, this should be
+ * changed to use av1_mem_malloc for the thread struct and job queue. */
+/* TODO: Add av1_mem_malloc.h include and replace calloc with av1_mem_malloc
+ * when AV1_MEM_OVERRIDE is active for proper DMA-able memory allocation. */
+
 #define NSEC_PER_USEC 1000ULL
 #define STUB_PROCESSING_DELAY_US 1000
-
-typedef struct Av1GpuQueueEntry {
-    Av1GpuJob *job;
-    int        enqueued;
-} Av1GpuQueueEntry;
 
 static void* gpu_thread_main(void *arg);
 
@@ -26,7 +30,8 @@ Av1GpuThread* av1_gpu_thread_create(int queue_depth, void *gpu_device) {
         return NULL;
     }
     
-    gt->jobs = calloc(queue_depth, sizeof(Av1GpuQueueEntry));
+    /* Allocate queue entries - must match Av1GpuThread.jobs type (Av1GpuQueueEntry) */
+    gt->jobs = calloc(queue_depth, sizeof(gt->jobs[0]));
     if (!gt->jobs) {
         free(gt);
         return NULL;
@@ -105,38 +110,33 @@ int av1_gpu_thread_wait(Av1GpuThread *gt, Av1GpuJob *job, uint32_t timeout_us) {
     
     pthread_mutex_lock(&gt->mutex);
     
-    int current_status = atomic_load(&job->status);
-    if (current_status == AV1_GPU_JOB_COMPLETE) {
-        pthread_mutex_unlock(&gt->mutex);
-        return 0;
-    }
-    
-    if (current_status == AV1_GPU_JOB_PROCESSING) {
-        if (timeout_us == 0) {
-            while (atomic_load(&job->status) == AV1_GPU_JOB_PROCESSING) {
-                pthread_cond_wait(&gt->job_complete, &gt->mutex);
-            }
-        } else {
-            struct timespec ts;
-            if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
+    /* Wait until job is complete or times out */
+    if (timeout_us == 0) {
+        /* Infinite wait */
+        while (atomic_load(&job->status) != AV1_GPU_JOB_COMPLETE) {
+            pthread_cond_wait(&gt->job_complete, &gt->mutex);
+        }
+    } else {
+        /* Timed wait */
+        struct timespec ts;
+        if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
+            pthread_mutex_unlock(&gt->mutex);
+            return -1;
+        }
+        
+        uint64_t nsec = (uint64_t)ts.tv_nsec + (uint64_t)timeout_us * NSEC_PER_USEC;
+        ts.tv_sec += (int)(nsec / 1000000000ULL);
+        ts.tv_nsec = (long)(nsec % 1000000000ULL);
+        
+        while (atomic_load(&job->status) != AV1_GPU_JOB_COMPLETE) {
+            int ret = pthread_cond_timedwait(&gt->job_complete, &gt->mutex, &ts);
+            if (ret == ETIMEDOUT) {
                 pthread_mutex_unlock(&gt->mutex);
                 return -1;
             }
-            
-            uint64_t nsec = (uint64_t)ts.tv_nsec + (uint64_t)timeout_us * NSEC_PER_USEC;
-            ts.tv_sec += (int)(nsec / 1000000000ULL);
-            ts.tv_nsec = (long)(nsec % 1000000000ULL);
-            
-            while (atomic_load(&job->status) == AV1_GPU_JOB_PROCESSING) {
-                int ret = pthread_cond_timedwait(&gt->job_complete, &gt->mutex, &ts);
-                if (ret == ETIMEDOUT) {
-                    pthread_mutex_unlock(&gt->mutex);
-                    return -1;
-                }
-                if (ret != 0) {
-                    pthread_mutex_unlock(&gt->mutex);
-                    return -1;
-                }
+            if (ret != 0) {
+                pthread_mutex_unlock(&gt->mutex);
+                return -1;
             }
         }
     }
@@ -190,6 +190,7 @@ static void* gpu_thread_main(void *arg) {
             break;
         }
         
+        /* Dequeue job */
         Av1GpuQueueEntry *entry = &gt->jobs[gt->head];
         Av1GpuJob *job = entry->job;
         
