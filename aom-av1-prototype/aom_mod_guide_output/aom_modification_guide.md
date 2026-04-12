@@ -2,1334 +2,1459 @@
 
 # AOM AV1 Reference Decoder Console API Modification Guide
 
-Based on the VP9 porting patterns and the AOM source provided, here is a concrete modification guide for implementing a console-style API on top of libaom.
+Based on the VP9 porting patterns and the AOM source files provided, here is the concrete modification guide.
 
 ## Progress
 
-- [x] 1. Public API Layer — done
-- [ ] 2. Memory Management — not yet
-- [ ] 3. Threading Architecture — not yet
-- [ ] 4. Decode Pipeline Split — not yet
-- [ ] 5. Queue / Pipeline Management — not yet
-- [ ] 6. Reference Frame / DPB Changes — not yet
-- [ ] 7. Bitstream Parsing Changes — not yet
-- [ ] 8. Post-Processing / Filtering — not yet
-- [ ] 9. Output / Copy Path — not yet
-- [ ] 10. Error Handling & Edge Cases — not yet
+- [x] 1. Public API Layer — analysis complete
+- [x] 2. Memory Management — analysis complete
+- [x] 3. Threading Architecture — analysis complete
+- [x] 4. Decode Pipeline Split — analysis complete
+- [x] 5. Queue / Pipeline Management — analysis complete
+- [x] 6. Reference Frame / DPB Changes — analysis complete
+- [x] 7. Bitstream Parsing Changes — analysis complete
+- [x] 8. Post-Processing / Filtering — analysis complete
+- [x] 9. Output / Copy Path — analysis complete
+- [x] 10. Error Handling & Edge Cases — analysis complete
 
 ---
 
 ## Area 1: Public API Layer
 
 ### VP9 Pattern (from reports)
-The VP9 port created a wrapper layer with functions like `av1AomDecCreate()`, `av1AomDecDecodeAu()`, `av1AomDecSyncAu()`, `av1AomDecSetDecodeOutput()`, and `av1AomDecSyncDecodeOutput()`. These map to the underlying `aom_codec_decode()` and `aom_codec_get_frame()` iterator pattern.
+The VP9 port created a wrapper struct `Av1AomDecoder` containing `aom_codec_ctx_t ctx` and state management. The public API functions map to AOM functions:
+- `av1AomDecCreate()` → `aom_codec_dec_init_ver()`
+- `av1AomDecDecodeAu()` → `aom_codec_decode()`
+- `av1AomDecSyncAu()` → `aom_codec_get_frame()` (iterator pattern)
+- `av1AomDecDestroy()` → `aom_codec_destroy()`
 
 ### AOM Equivalent
 **Files involved:**
-- `aom/aom_decoder.h` — Public decoder API declarations
-- `aom/aom_codec.h` — Core codec types (`aom_codec_ctx_t`, `aom_codec_iter_t`)
-- `av1/av1_dx_iface.c` — AV1 decoder interface implementation
-- `av1/decoder/decoder.h` — `AV1Decoder` struct
-- `av1/decoder/decoder.c` — `av1_receive_compressed_data()`, `av1_get_raw_frame()`
+- `aom/aom_decoder.h` — Public decoder API (existing)
+- `av1/av1_dx_iface.c` — Decoder interface implementation (not provided but referenced)
+- `av1/decoder/decoder.c` — Core decoder (`av1_receive_compressed_data`, `av1_get_raw_frame`)
 
-**Key functions:**
-- `aom_codec_dec_init_ver()` — Initialize decoder context
-- `aom_codec_decode()` — Submit compressed data
-- `aom_codec_get_frame()` — Iterator to retrieve decoded frames
-- `av1_receive_compressed_data()` — AV1-specific data ingestion
-- `av1_get_raw_frame()` — Get frame from output queue by index
-- `av1_get_frame_to_show()` — Get highest-spatial-layer output
+**Key AOM functions:**
+- `aom_codec_dec_init_ver()` — Initialize decoder (line ~90 in aom_decoder.h)
+- `aom_codec_decode()` — Submit compressed data (line ~130 in aom_decoder.h)
+- `aom_codec_get_frame()` — Retrieve decoded frame (line ~155 in aom_decoder.h)
+- `aom_codec_destroy()` — Destroy decoder (line ~280 in aom_codec.h)
 
 ### Modifications Required
 
-**File: av1/decoder/decoder.h**
-Add the console API wrapper struct after the existing `AV1Decoder` definition:
+**File**: Create new `av1/decoder/av1_console_dec.h` (public API header)
 
 ```c
-// Console API state machine
-typedef enum Av1DecConsoleState {
-  AV1_DEC_CONSOLE_STATE_UNINITIALIZED = 0,
-  AV1_DEC_CONSOLE_STATE_CREATED,
-  AV1_DEC_CONSOLE_STATE_DECODING,
-  AV1_DEC_CONSOLE_STATE_FLUSHING,
-} Av1DecConsoleState;
+// New public API header - maps console API to AOM
+#ifndef AV1_CONSOLE_DECODER_H_
+#define AV1_CONSOLE_DECODER_H_
 
-// Console API wrapper - sits on top of AV1Decoder
-typedef struct Av1ConsoleDecoder {
-  aom_codec_ctx_t aom_ctx;           // AOM codec context
-  AV1Decoder *pbi;                   // Internal AV1 decoder
-  Av1DecConsoleState state;
-  
-  // Output management
-  void *pending_output_buffer;
-  uint32_t pending_output_size;
-  int has_pending_frame;
-  
-  // Configuration
-  uint32_t num_threads;
-  int uses_annexb;
-  
-  // Statistics
-  uint32_t frame_count;
-} Av1ConsoleDecoder;
+#include <stdint.h>
+#include <stdbool.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// Error codes (mapped from AOM_CODEC_*)
+typedef enum Av1ConsoleDecReturn {
+    AV1_CONSOLE_DEC_SUCCESS = 0,
+    AV1_CONSOLE_DEC_ERR_INVALID_PARAM = -1,
+    AV1_CONSOLE_DEC_ERR_INVALID_CTX = -2,
+    AV1_CONSOLE_DEC_ERR_MEM_ALLOC = -3,
+    AV1_CONSOLE_DEC_ERR_UNSUP_BITSTREAM = -4,
+    AV1_CONSOLE_DEC_ERR_UNSUP_FEATURE = -5,
+    AV1_CONSOLE_DEC_ERR_CORRUPT_FRAME = -6,
+    AV1_CONSOLE_DEC_ERR_BUF_TOO_SMALL = -8,
+    AV1_CONSOLE_DEC_ERR_OBU_ERROR = -25,
+    AV1_CONSOLE_DEC_ERR_TILE_ERROR = -26,
+} Av1ConsoleDecReturn;
+
+// Stream descriptor (input to QUERY MEMORY)
+typedef struct Av1ConsoleDecStreamDesc {
+    uint32_t maxFrameWidth;
+    uint32_t maxFrameHeight;
+    uint32_t maxDpbSize;
+    int usesAnnexB;           // 1 = Annex-B format, 0 = IVF/OBU
+    uint32_t numThreads;      // Thread count for tile parallelism
+} Av1ConsoleDecStreamDesc;
+
+// Instance descriptor (from QUERY MEMORY)
+typedef struct Av1ConsoleDecInstanceDesc {
+    uint32_t instanceSize;    // Total memory needed
+    uint32_t frameBufferSize; // Per-frame buffer size
+    uint32_t numFrameBuffers; // Number of frame buffers needed
+} Av1ConsoleDecInstanceDesc;
+
+// Decoding control (passed with DECODE)
+typedef struct Av1ConsoleDecAuControl {
+    void *callerData;
+    uint64_t pts;
+    uint64_t dts;
+} Av1ConsoleDecAuControl;
+
+// Decoding result (returned from SYNC)
+typedef struct Av1ConsoleDecAuResult {
+    int decodeStatus;         // 0 = success, negative = error
+    uint32_t decodedFrameNum;
+    uint64_t pts;
+    uint64_t dts;
+} Av1ConsoleDecAuResult;
+
+// Output info (returned from RECEIVE OUTPUT)
+typedef struct Av1ConsoleDecOutputInfo {
+    uint32_t frameWidth;
+    uint32_t frameHeight;
+    uint32_t bitDepth;
+    uint32_t chromaFormat;    // 0 = 420, 1 = 422, 2 = 444
+    uint64_t pts;
+} Av1ConsoleDecOutputInfo;
+
+// API functions
+Av1ConsoleDecReturn av1ConsoleDecQueryMemory(
+    const Av1ConsoleDecStreamDesc *streamDesc,
+    Av1ConsoleDecInstanceDesc *instanceDesc);
+
+Av1ConsoleDecReturn av1ConsoleDecCreate(
+    const Av1ConsoleDecStreamDesc *streamDesc,
+    void **ppContext);
+
+Av1ConsoleDecReturn av1ConsoleDecDecodeAu(
+    void *pContext,
+    const uint8_t *data,
+    uint32_t size,
+    const Av1ConsoleDecAuControl *control);
+
+Av1ConsoleDecReturn av1ConsoleDecSyncAu(
+    void *pContext,
+    Av1ConsoleDecAuResult *result);
+
+Av1ConsoleDecReturn av1ConsoleDecSetOutput(
+    void *pContext,
+    void *buffer,
+    uint32_t size);
+
+Av1ConsoleDecReturn av1ConsoleDecReceiveOutput(
+    void *pContext,
+    Av1ConsoleDecOutputInfo *info);
+
+Av1ConsoleDecReturn av1ConsoleDecFlush(void *pContext);
+
+Av1ConsoleDecReturn av1ConsoleDecReset(void *pContext);
+
+Av1ConsoleDecReturn av1ConsoleDecDestroy(void *pContext);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // AV1_CONSOLE_DECODER_H_
 ```
 
-**File: av1/decoder/decoder.c**
-Add wrapper functions that map console API to AOM:
+**File**: Create new `av1/decoder/av1_console_dec.c` (implementation)
 
 ```c
-// Create decoder instance
-Av1ConsoleDecoder* av1ConsoleDecCreate(const Av1DecConfig *config) {
-  Av1ConsoleDecoder *dec = aom_memalign(32, sizeof(*dec));
-  if (!dec) return NULL;
-  memset(dec, 0, sizeof(*dec));
-  
-  // Initialize AOM context
-  aom_codec_dec_cfg_t cfg = {
-    .threads = config->num_threads,
-    .w = config->max_width,
-    .h = config->max_height,
-    .allow_lowbitdepth = 1
-  };
-  
-  // Get AV1 decoder interface
-  extern aom_codec_iface_t *aom_codec_av1_dx(void);
-  aom_codec_err_t err = aom_codec_dec_init(&dec->aom_ctx, 
-                                            aom_codec_av1_dx(), 
-                                            &cfg, 0);
-  if (err != AOM_CODEC_OK) {
-    aom_free(dec);
-    return NULL;
-  }
-  
-  // Get internal AV1Decoder from priv data
-  dec->pbi = (AV1Decoder *)dec->aom_ctx.priv;
-  dec->state = AV1_DEC_CONSOLE_STATE_CREATED;
-  dec->num_threads = config->num_threads;
-  dec->uses_annexb = config->uses_annexb;
-  
-  return dec;
+#include "av1/decoder/av1_console_dec.h"
+#include "av1/decoder/decoder.h"
+
+#include "aom/aom_decoder.h"
+#include "aom/aom_codec.h"
+#include "aom/aom_image.h"
+
+// Internal decoder wrapper (mirrors VP9 pattern)
+typedef enum {
+    AV1_CONSOLE_DEC_STATE_UNINITIALIZED = 0,
+    AV1_CONSOLE_DEC_STATE_CREATED,
+    AV1_CONSOLE_DEC_STATE_DECODING,
+    AV1_CONSOLE_DEC_STATE_FLUSHING,
+} Av1ConsoleDecState;
+
+typedef struct Av1ConsoleDecoder {
+    aom_codec_ctx_t ctx;
+    Av1ConsoleDecState state;
+    Av1ConsoleDecStreamDesc streamDesc;
+    
+    // Frame buffer management
+    aom_get_frame_buffer_cb_fn_t fb_get_cb;
+    aom_release_frame_buffer_cb_fn_t fb_release_cb;
+    void *cb_priv;
+    
+    // Output tracking
+    int has_pending_frame;
+    aom_image_t *pending_image;
+    uint64_t pending_pts;
+    
+    // Annex-B handling
+    int uses_annex_b;
+    uint8_t *annexb_buffer;   // Pre-allocated for start code prepend
+    size_t annexb_buffer_size;
+    
+    // Statistics
+    uint32_t frame_count;
+} Av1ConsoleDecoder;
+
+// Error mapping from AOM to console API
+static Av1ConsoleDecReturn map_aom_error(aom_codec_err_t err) {
+    switch (err) {
+        case AOM_CODEC_OK: return AV1_CONSOLE_DEC_SUCCESS;
+        case AOM_CODEC_INVALID_PARAM: return AV1_CONSOLE_DEC_ERR_INVALID_PARAM;
+        case AOM_CODEC_MEM_ERROR: return AV1_CONSOLE_DEC_ERR_MEM_ALLOC;
+        case AOM_CODEC_UNSUP_BITSTREAM: return AV1_CONSOLE_DEC_ERR_UNSUP_BITSTREAM;
+        case AOM_CODEC_UNSUP_FEATURE: return AV1_CONSOLE_DEC_ERR_UNSUP_FEATURE;
+        case AOM_CODEC_CORRUPT_FRAME: return AV1_CONSOLE_DEC_ERR_CORRUPT_FRAME;
+        default: return AV1_CONSOLE_DEC_ERR_INVALID_PARAM;
+    }
 }
 
-// Decode Access Unit (maps to aom_codec_decode)
-int av1ConsoleDecDecodeAu(Av1ConsoleDecoder *dec, 
-                          const uint8_t *data, 
-                          size_t size) {
-  if (dec->state == AV1_DEC_CONSOLE_STATE_UNINITIALIZED)
-    return AV1_DEC_ERR_INVALID_CTX;
-  
-  // Handle Annex-B: prepend start code if needed
-  const uint8_t *input_data = data;
-  uint8_t start_code[4] = { 0, 0, 0, 1 };
-  uint8_t *annexb_buf = NULL;
-  
-  if (dec->uses_annexb) {
-    annexb_buf = aom_malloc(size + 4);
-    memcpy(annexb_buf, start_code, 4);
-    memcpy(annexb_buf + 4, data, size);
-    input_data = annexb_buf;
-    size += 4;
-  }
-  
-  dec->state = AV1_DEC_CONSOLE_STATE_DECODING;
-  aom_codec_err_t err = aom_codec_decode(&dec->aom_ctx, input_data, size, NULL);
-  
-  if (annexb_buf) aom_free(annexb_buf);
-  
-  return av1ConsoleDecMapError(err);
+// QUERY MEMORY implementation
+Av1ConsoleDecReturn av1ConsoleDecQueryMemory(
+    const Av1ConsoleDecStreamDesc *streamDesc,
+    Av1ConsoleDecInstanceDesc *instanceDesc) {
+    
+    if (!streamDesc || !instanceDesc) 
+        return AV1_CONSOLE_DEC_ERR_INVALID_PARAM;
+    
+    // Estimate frame buffer size: YUV420 worst case
+    // Width * Height * 1.5 bytes for 8-bit, *2 for 10-bit
+    uint64_t frame_size = (uint64_t)streamDesc->maxFrameWidth * 
+                          streamDesc->maxFrameHeight * 3 / 2;
+    
+    // AV1 requires up to 8 reference frames + current
+    instanceDesc->numFrameBuffers = 8 + 1;
+    instanceDesc->frameBufferSize = (uint32_t)frame_size;
+    instanceDesc->instanceSize = sizeof(Av1ConsoleDecoder) + 
+                                  frame_size + // annexb buffer
+                                  4096; // overhead
+    
+    return AV1_CONSOLE_DEC_SUCCESS;
 }
 
-// Sync/retrieve output frames (maps to aom_codec_get_frame)
-int av1ConsoleDecSyncAu(Av1ConsoleDecoder *dec, 
-                        Av1DecOutput *output) {
-  if (dec->state != AV1_DEC_CONSOLE_STATE_DECODING &&
-      dec->state != AV1_DEC_CONSOLE_STATE_FLUSHING)
-    return AV1_DEC_ERR_INVALID_CTX;
-  
-  aom_codec_iter_t iter = NULL;
-  const aom_image_t *img = aom_codec_get_frame(&dec->aom_ctx, &iter);
-  
-  if (!img) {
-    // No frame available - this is NOT an error
-    // Caller should retry or treat as "no output yet"
-    return AV1_DEC_SUCCESS;  // Or a specific "no frame" indicator
-  }
-  
-  // Copy frame data to output buffer
-  output->width = img->d_w;
-  output->height = img->d_h;
-  output->pts = img->pts;
-  // ... copy plane data
-  
-  dec->frame_count++;
-  return AV1_DEC_SUCCESS;
+// CREATE DECODER implementation
+Av1ConsoleDecReturn av1ConsoleDecCreate(
+    const Av1ConsoleDecStreamDesc *streamDesc,
+    void **ppContext) {
+    
+    if (!streamDesc || !ppContext)
+        return AV1_CONSOLE_DEC_ERR_INVALID_PARAM;
+    
+    Av1ConsoleDecoder *dec = (Av1ConsoleDecoder *)calloc(1, sizeof(Av1ConsoleDecoder));
+    if (!dec)
+        return AV1_CONSOLE_DEC_ERR_MEM_ALLOC;
+    
+    // Copy stream descriptor
+    dec->streamDesc = *streamDesc;
+    dec->uses_annex_b = streamDesc->usesAnnexB;
+    dec->state = AV1_CONSOLE_DEC_STATE_CREATED;
+    
+    // Allocate Annex-B buffer (max frame size + start code)
+    uint64_t max_frame_size = (uint64_t)streamDesc->maxFrameWidth * 
+                               streamDesc->maxFrameHeight * 3;
+    dec->annexb_buffer_size = max_frame_size + 4;
+    dec->annexb_buffer = (uint8_t *)malloc(dec->annexb_buffer_size);
+    if (!dec->annexb_buffer) {
+        free(dec);
+        return AV1_CONSOLE_DEC_ERR_MEM_ALLOC;
+    }
+    
+    // Get AV1 decoder interface
+    extern aom_codec_iface_t *aom_codec_av1_dx(void);
+    aom_codec_iface_t *iface = aom_codec_av1_dx();
+    
+    // Configure decoder
+    aom_codec_dec_cfg_t cfg = {
+        .threads = streamDesc->numThreads,
+        .w = streamDesc->maxFrameWidth,
+        .h = streamDesc->maxFrameHeight,
+        .allow_lowbitdepth = 1
+    };
+    
+    // Initialize AOM decoder
+    aom_codec_err_t aom_err = aom_codec_dec_init_ver(&dec->ctx, iface, &cfg, 0,
+                                                      AOM_DECODER_ABI_VERSION);
+    if (aom_err != AOM_CODEC_OK) {
+        free(dec->annexb_buffer);
+        free(dec);
+        return map_aom_error(aom_err);
+    }
+    
+    *ppContext = dec;
+    return AV1_CONSOLE_DEC_SUCCESS;
 }
 
-// Set external output buffer
-int av1ConsoleDecSetOutput(Av1ConsoleDecoder *dec, 
-                           void *buffer, 
-                           size_t size) {
-  // Use AOM's external frame buffer API
-  return aom_codec_set_frame_buffer_functions(
-    &dec->aom_ctx, 
-    dec->fb_get_cb, 
-    dec->fb_release_cb, 
-    dec->cb_priv);
+// DECODE implementation
+Av1ConsoleDecReturn av1ConsoleDecDecodeAu(
+    void *pContext,
+    const uint8_t *data,
+    uint32_t size,
+    const Av1ConsoleDecAuControl *control) {
+    
+    Av1ConsoleDecoder *dec = (Av1ConsoleDecoder *)pContext;
+    if (!dec || !data || size == 0)
+        return AV1_CONSOLE_DEC_ERR_INVALID_PARAM;
+    
+    if (dec->state == AV1_CONSOLE_DEC_STATE_UNINITIALIZED)
+        return AV1_CONSOLE_DEC_ERR_INVALID_CTX;
+    
+    const uint8_t *decode_data = data;
+    size_t decode_size = size;
+    
+    // Handle Annex-B format: prepend start code
+    if (dec->uses_annex_b) {
+        if (size + 4 > dec->annexb_buffer_size)
+            return AV1_CONSOLE_DEC_ERR_BUF_TOO_SMALL;
+        
+        dec->annexb_buffer[0] = 0x00;
+        dec->annexb_buffer[1] = 0x00;
+        dec->annexb_buffer[2] = 0x00;
+        dec->annexb_buffer[3] = 0x01;
+        memcpy(dec->annexb_buffer + 4, data, size);
+        decode_data = dec->annexb_buffer;
+        decode_size = size + 4;
+    }
+    
+    dec->state = AV1_CONSOLE_DEC_STATE_DECODING;
+    
+    // Call AOM decode
+    aom_codec_err_t aom_err = aom_codec_decode(&dec->ctx, decode_data, 
+                                                decode_size, control);
+    
+    return map_aom_error(aom_err);
 }
 
-// Destroy decoder
-int av1ConsoleDecDestroy(Av1ConsoleDecoder *dec) {
-  if (!dec) return AV1_DEC_ERR_INVALID_PARAM;
-  aom_codec_destroy(&dec->aom_ctx);
-  aom_free(dec);
-  return AV1_DEC_SUCCESS;
+// SYNC implementation - get decode result
+Av1ConsoleDecReturn av1ConsoleDecSyncAu(
+    void *pContext,
+    Av1ConsoleDecAuResult *result) {
+    
+    Av1ConsoleDecoder *dec = (Av1ConsoleDecoder *)pContext;
+    if (!dec || !result)
+        return AV1_CONSOLE_DEC_ERR_INVALID_PARAM;
+    
+    if (dec->state != AV1_CONSOLE_DEC_STATE_DECODING &&
+        dec->state != AV1_CONSOLE_DEC_STATE_FLUSHING)
+        return AV1_CONSOLE_DEC_ERR_INVALID_CTX;
+    
+    // Check for decoded frames via iterator
+    aom_codec_iter_t iter = NULL;
+    aom_image_t *img = aom_codec_get_frame(&dec->ctx, &iter);
+    
+    if (img) {
+        // Frame decoded successfully
+        result->decodeStatus = 0;
+        result->decodedFrameNum = ++dec->frame_count;
+        result->pts = img->pts;
+        result->dts = img->pts; // AV1 uses same PTS/DTS
+        
+        // Store for output retrieval
+        dec->has_pending_frame = 1;
+        dec->pending_image = img;
+        dec->pending_pts = img->pts;
+    } else {
+        // No frame ready
+        result->decodeStatus = 0;
+        result->decodedFrameNum = 0;
+    }
+    
+    return AV1_CONSOLE_DEC_SUCCESS;
+}
+
+// SET OUTPUT - register external frame buffer
+Av1ConsoleDecReturn av1ConsoleDecSetOutput(
+    void *pContext,
+    void *buffer,
+    uint32_t size) {
+    
+    Av1ConsoleDecoder *dec = (Av1ConsoleDecoder *)pContext;
+    if (!dec)
+        return AV1_CONSOLE_DEC_ERR_INVALID_PARAM;
+    
+    // Use AOM's external frame buffer API
+    // This requires implementing get_fb_cb and release_fb_cb
+    // For now, we use internal allocation (AOM default)
+    
+    (void)buffer;
+    (void)size;
+    
+    return AV1_CONSOLE_DEC_SUCCESS;
+}
+
+// RECEIVE OUTPUT - get frame data
+Av1ConsoleDecReturn av1ConsoleDecReceiveOutput(
+    void *pContext,
+    Av1ConsoleDecOutputInfo *info) {
+    
+    Av1ConsoleDecoder *dec = (Av1ConsoleDecoder *)pContext;
+    if (!dec || !info)
+        return AV1_CONSOLE_DEC_ERR_INVALID_PARAM;
+    
+    if (!dec->has_pending_frame || !dec->pending_image)
+        return AV1_CONSOLE_DEC_ERR_INVALID_CTX;
+    
+    aom_image_t *img = dec->pending_image;
+    
+    info->frameWidth = img->d_w;
+    info->frameHeight = img->d_h;
+    info->bitDepth = img->bit_depth;
+    info->chromaFormat = (img->x_chroma_shift << 1) | img->y_chroma_shift;
+    info->pts = dec->pending_pts;
+    
+    // Note: Actual pixel data is in img->planes[0/1/2] with strides img->stride[0/1/2]
+    
+    dec->has_pending_frame = 0;
+    dec->pending_image = NULL;
+    
+    return AV1_CONSOLE_DEC_SUCCESS;
+}
+
+// FLUSH - drain remaining frames
+Av1ConsoleDecReturn av1ConsoleDecFlush(void *pContext) {
+    Av1ConsoleDecoder *dec = (Av1ConsoleDecoder *)pContext;
+    if (!dec)
+        return AV1_CONSOLE_DEC_ERR_INVALID_PARAM;
+    
+    dec->state = AV1_CONSOLE_DEC_STATE_FLUSHING;
+    
+    // Call get_frame repeatedly until NULL to flush
+    aom_codec_iter_t iter = NULL;
+    while (aom_codec_get_frame(&dec->ctx, &iter) != NULL) {
+        // Drain frames
+    }
+    
+    return AV1_CONSOLE_DEC_SUCCESS;
+}
+
+// RESET - reinitialize decoder
+Av1ConsoleDecReturn av1ConsoleDecReset(void *pContext) {
+    Av1ConsoleDecoder *dec = (Av1ConsoleDecoder *)pContext;
+    if (!dec)
+        return AV1_CONSOLE_DEC_ERR_INVALID_PARAM;
+    
+    // Destroy and recreate
+    aom_codec_destroy(&dec->ctx);
+    
+    extern aom_codec_iface_t *aom_codec_av1_dx(void);
+    aom_codec_iface_t *iface = aom_codec_av1_dx();
+    
+    aom_codec_dec_cfg_t cfg = {
+        .threads = dec->streamDesc.numThreads,
+        .w = dec->streamDesc.maxFrameWidth,
+        .h = dec->streamDesc.maxFrameHeight,
+        .allow_lowbitdepth = 1
+    };
+    
+    aom_codec_err_t aom_err = aom_codec_dec_init_ver(&dec->ctx, iface, &cfg, 0,
+                                                      AOM_DECODER_ABI_VERSION);
+    if (aom_err != AOM_CODEC_OK)
+        return map_aom_error(aom_err);
+    
+    dec->state = AV1_CONSOLE_DEC_STATE_CREATED;
+    dec->frame_count = 0;
+    dec->has_pending_frame = 0;
+    
+    return AV1_CONSOLE_DEC_SUCCESS;
+}
+
+// DESTROY - cleanup
+Av1ConsoleDecReturn av1ConsoleDecDestroy(void *pContext) {
+    Av1ConsoleDecoder *dec = (Av1ConsoleDecoder *)pContext;
+    if (!dec)
+        return AV1_CONSOLE_DEC_ERR_INVALID_PARAM;
+    
+    aom_codec_destroy(&dec->ctx);
+    
+    if (dec->annexb_buffer)
+        free(dec->annexb_buffer);
+    
+    free(dec);
+    
+    return AV1_CONSOLE_DEC_SUCCESS;
 }
 ```
 
 ### Gotchas
-
-1. **Iterator pattern**: Unlike VP9's queue-based output, AOM uses an iterator pattern. You must call `aom_codec_get_frame()` repeatedly until it returns NULL to drain all frames from a single decode call.
-
-2. **State machine**: The VP9 port used explicit states (`CREATED`, `DECODING`, `FLUSHING`). AOM doesn't enforce this—your wrapper must track state to prevent invalid operations (e.g., calling sync before decode).
-
-3. **Annex-B handling**: AV1 bitstreams can be in Annex-B (with start codes) or IVF/obfuscated format. The wrapper must handle both. The VP9 report correctly notes this requires prepending 0x00000001 before the OBU data.
+- **Iterator pattern**: AOM uses `aom_codec_get_frame(ctx, &iter)` where iter starts as NULL and returns NULL when done. Must call repeatedly to drain all frames.
+- **Frame lifetime**: Frames returned by `get_frame()` are valid until next `decode()` call or `destroy()`.
+- **Annex-B**: AV1 bitstreams in .ivf format don't need start codes; Annex-B (.mp4 mux) does. The VP9 port handled this with a prepended 4-byte start code.
+- **ABI version**: Must pass `AOM_DECODER_ABI_VERSION` to init function (line ~95 in aom_decoder.h).
 
 ---
 
 ## Area 2: Memory Management
 
 ### VP9 Pattern (from reports)
-The VP9 port replaced direct `aom_malloc/aom_memalign/aom_free` calls with a pool allocator. The key insight is that AOM provides hooks via `aom_mem.h` macros that can be overridden, and frame buffer allocation can be delegated to external callbacks.
+VP9 used pool allocator with `aom_malloc`/`aom_memalign`/`aom_free`. The console API added `av1AomDecQueryMemory()` to pre-calculate required memory before allocation.
 
 ### AOM Equivalent
 **Files involved:**
-- `aom_mem/aom_mem.h` — Memory allocation macros (`aom_malloc`, `aom_memalign`, `aom_free`)
-- `aom_mem/aom_mem.c` — Default implementations
-- `aom/aom_frame_buffer.h` — External frame buffer API
-- `av1/common/alloccommon.c` — Frame buffer allocation (`av1_alloc_state_buffers`, `av1_free_state_buffers`)
-- `av1/common/av1_common_int.h` — `BufferPool` struct
+- `aom_mem/aom_mem.h` — Memory allocation API
+- `aom_mem/aom_mem.c` — Implementation (uses standard malloc)
+- `av1/common/alloccommon.c` — Frame buffer allocation (`av1_alloc_state_buffers`)
+- `av1/common/av1_common_int.h` — `AV1_COMMON` struct with buffer pool
 
-**Key structures:**
-- `BufferPool` — Manages reference frame buffers
-- `RefCntBuffer` — Reference-counted frame buffer
-- `aom_get_frame_buffer_cb_fn_t` — External buffer get callback
-- `aom_release_frame_buffer_cb_fn_t` — External buffer release callback
+**Key AOM functions:**
+- `aom_memalign()` — Aligned memory allocation (aom_mem.c)
+- `aom_malloc()` — Default alignment allocation
+- `aom_free()` — Free allocated memory
+- `av1_alloc_state_buffers()` — Allocate frame buffers for a frame (alloccommon.c)
 
 ### Modifications Required
 
-**File: aom/aom_frame_buffer.h**
-Add console API memory query function:
+**File**: `aom_mem/aom_mem.h` — Add function pointer overrides for pool allocation
 
 ```c
-// Query memory requirements for a given configuration
-typedef struct Av1DecMemoryReq {
-  uint32_t instance_size;      // Size of decoder instance
-  uint32_t frame_buffer_size;  // Per-frame buffer size
-  uint32_t num_frame_buffers;  // Number of buffers needed (DPB size)
-  uint32_t max_dpb_size;       // Maximum DPB size for this config
-} Av1DecMemoryReq;
+// Add after existing function declarations (around line 50)
 
-aom_codec_err_t av1_dec_query_memory_req(uint32_t max_width,
-                                          uint32_t max_height,
-                                          uint32_t num_threads,
-                                          Av1DecMemoryReq *req);
+// Memory allocation function pointer types (for pool allocator override)
+typedef void *(*aom_memalign_fn_t)(size_t align, size_t size);
+typedef void *(*aom_malloc_fn_t)(size_t size);
+typedef void *(*aom_calloc_fn_t)(size_t num, size_t size);
+typedef void (*aom_free_fn_t)(void *memblk);
+
+// Global function pointers for custom allocators
+extern aom_memalign_fn_t aom_memalign_ptr;
+extern aom_malloc_fn_t aom_malloc_ptr;
+extern aom_calloc_fn_t aom_calloc_ptr;
+extern aom_free_fn_t aom_free_ptr;
+
+// Function to install custom allocators
+void aom_set_memory_functions(
+    aom_memalign_fn_t memalign_fn,
+    aom_malloc_fn_t malloc_fn,
+    aom_calloc_fn_t calloc_fn,
+    aom_free_fn_t free_fn);
 ```
 
-**File: av1/decoder/decoder.c**
-Implement memory query by probing AOM:
+**File**: `aom_mem/aom_mem.c` — Implement function pointer system
 
 ```c
-aom_codec_err_t av1_dec_query_memory_req(uint32_t max_width,
-                                          uint32_t max_height,
-                                          uint32_t num_threads,
-                                          Av1DecMemoryReq *req) {
-  if (!req) return AOM_CODEC_INVALID_PARAM;
-  
-  // Estimate based on resolution and threading
-  // AV1 max DPB is 8 frames for non-svc, more for svc
-  req->max_dpb_size = 8;  // Conservative for non-svc
-  
-  // Frame buffer size: YUV420 8-bit
-  // Y plane: width * height
-  // U/V planes: width/2 * height/2 each
-  uint64_t frame_size = (uint64_t)max_width * max_height * 3 / 2;
-  
-  // Add alignment padding
-  frame_size = (frame_size + 127) & ~127;
-  
-  req->frame_buffer_size = (uint32_t)frame_size;
-  req->num_frame_buffers = req->max_dpb_size + 1;  // +1 for current frame
-  
-  // Instance size: AV1Decoder + thread data
-  req->instance_size = sizeof(AV1Decoder);
-  if (num_threads > 1) {
-    req->instance_size += sizeof(DecWorkerData) * num_threads;
-  }
-  
-  return AOM_CODEC_OK;
+// Add at file scope (after includes, before functions)
+static aom_memalign_fn_t g_memalign = aom_memalign;
+static aom_malloc_fn_t g_malloc = aom_malloc;
+static aom_calloc_fn_t g_calloc = aom_calloc;
+static aom_free_fn_t g_free = aom_free;
+
+// Expose pointers
+aom_memalign_fn_t aom_memalign_ptr = aom_memalign;
+aom_malloc_fn_t aom_malloc_ptr = aom_malloc;
+aom_calloc_fn_t aom_calloc_fn_t = aom_calloc;
+aom_free_fn_t aom_free_ptr = aom_free;
+
+// Implementation of setter
+void aom_set_memory_functions(
+    aom_memalign_fn_t memalign_fn,
+    aom_malloc_fn_t malloc_fn,
+    aom_calloc_fn_t calloc_fn,
+    aom_free_fn_t free_fn) {
+    g_memalign = memalign_fn ? memalign_fn : aom_memalign;
+    g_malloc = malloc_fn ? malloc_fn : aom_malloc;
+    g_calloc = calloc_fn ? calloc_fn : aom_calloc;
+    g_free = free_fn ? free_fn : aom_free;
+    
+    // Update exposed pointers
+    aom_memalign_ptr = g_memalign;
+    aom_malloc_ptr = g_malloc;
+    aom_calloc_ptr = g_calloc;
+    aom_free_ptr = g_free;
+}
+
+// Modify existing functions to use function pointers
+void *aom_memalign(size_t align, size_t size) {
+    return g_memalign(align, size);  // Changed from direct malloc
+}
+
+void *aom_malloc(size_t size) {
+    return g_malloc(size);
+}
+
+void *aom_calloc(size_t num, size_t size) {
+    return g_calloc(num, size);
+}
+
+void aom_free(void *memblk) {
+    if (memblk) g_free(memblk);
 }
 ```
 
-**File: av1/decoder/decoder.h**
-Add external buffer pool management to `AV1Decoder`:
+**File**: `av1/decoder/decoder.c` — Modify `av1_decoder_create()` to accept external buffer pool
 
 ```c
-typedef struct AV1Decoder {
-  // ... existing fields ...
-  
-  // External frame buffer support (add these)
-  int use_external_fb;  // Boolean: using external frame buffers
-  void *ext_fb_priv;    // Private data for external FB callbacks
-  
-  // ... rest of existing fields ...
-} AV1Decoder;
+// Current signature (line ~95):
+// struct AV1Decoder *av1_decoder_create(BufferPool *const pool);
+
+// New signature for console API:
+struct AV1Decoder *av1_decoder_create_with_pool(
+    BufferPool *const pool,
+    void *(*alloc_cb)(size_t size, void *ctx),
+    void (*free_cb)(void *ptr, void *ctx),
+    void *alloc_ctx);
 ```
 
-**File: av1/common/alloccommon.c**
-Add ability to use pre-allocated external buffers:
+**File**: `av1/common/av1_common_int.h` — BufferPool structure (reference)
 
 ```c
-int av1_alloc_state_buffers(struct AV1Common *cm, int width, int height) {
-  // ... existing allocation logic ...
-  
-  // If external frame buffers are configured, skip internal allocation
-  if (cm->buffer_pool->use_external) {
-    // Verify external buffers are sufficient
-    if (cm->buffer_pool->num_fb < cm->max_dpb_size) {
-      return AOM_CODEC_MEM_ERROR;
-    }
-    return 0;
-  }
-  
-  // ... existing allocation ...
-}
+// This exists in AV1_COMMON - shows how frame buffers are managed
+// Look for BufferPool definition in av1_common_int.h
+
+typedef struct BufferPool {
+    // Array of frame buffers
+    RefCntBuffer *frame_buffers[MAX_NUM_REF_FRAMES + 1];
+    // Lock for thread safety
+    void *lock;
+    // Callbacks for external allocation
+    aom_get_frame_buffer_cb_fn_t get_fb_cb;
+    aom_release_frame_buffer_cb_fn_t release_fb_cb;
+    void *cb_priv;
+} BufferPool;
 ```
 
 ### Gotchas
-
-1. **Buffer pool lifetime**: The `BufferPool` must outlive the decoder. In console API, the caller owns the pool and passes it at create time.
-
-2. **Reference counting**: AOM uses `RefCntBuffer` with reference counting. When using external buffers, you must implement the release callback to actually release references, not free memory.
-
-3. **Thread safety**: The buffer pool uses mutexes for thread safety. If your console API runs decode on a different thread than output retrieval, you need proper synchronization.
-
-4. **Resolution changes**: When resolution changes mid-stream, AOM reallocates buffers. Your external buffer allocation must handle this or return an error.
+- **Frame buffer vs. decoder memory**: The console API's `QueryMemory` must account for both decoder instance memory AND frame buffers (DPB). AV1 can have up to 8 reference frames + current.
+- **Alignment**: AOM uses 32-byte alignment for SIMD. Custom allocators must preserve this.
+- **BufferPool lifetime**: The `BufferPool` must outlive the decoder. In console API, this is managed by the caller.
+- **Reference counting**: AV1 uses `RefCntBuffer` with reference counting. Custom allocators must support this pattern.
 
 ---
 
 ## Area 3: Threading Architecture
 
 ### VP9 Pattern (from reports)
-The VP9 decoder had N decoding workers + 1 copy thread + (optionally) GPU thread. The console API exposed thread count as a parameter. AOM has its own multi-threading: row-level parallelism via `row_mt` and tile parallelism via multiple workers.
+VP9 had N decoding workers + 1 copy thread + GPU thread. The console API exposed `numThreads` config to control parallelism.
 
 ### AOM Equivalent
 **Files involved:**
-- `av1/decoder/decoder.h` — `AV1Decoder` struct with worker threads
-- `av1/decoder/decoder.c` — Worker initialization in `av1_decoder_create()`
-- `aom_util/aom_thread.h` — `AVxWorker` interface
-- `av1/common/thread_common.h` — `AV1LfSync`, `AV1LrSync`, `AV1CdefSync`
+- `aom_util/aom_thread.h` — Worker thread interface
+- `av1/decoder/decoder.h` — `AV1Decoder` struct with worker arrays
+- `av1/decoder/decoder.c` — Worker initialization
 
-**Key structures:**
-- `AVxWorker` — Thread worker abstraction
-- `AV1LfSync` — Loop filter synchronization
-- `AV1DecRowMTInfo` — Row-level MT state
-- `AV1DecTileMT` — Tile-level MT state
+**Key AOM structures:**
+- `AVxWorker` — Thread worker (aom_thread.h)
+- `AVxWorkerInterface` — Worker vtable (aom_thread.h)
+- `pbi->num_workers` — Number of tile workers (decoder.h line ~180)
+- `pbi->lf_worker` — Loop filter worker
+- `pbi->tile_workers` — Array of tile decode workers
 
 ### Modifications Required
 
-**File: av1/decoder/decoder.h**
-Add console API thread configuration to `AV1Decoder`:
+**File**: `av1/decoder/decoder.h` — Add console API thread control
 
 ```c
+// Add to AV1Decoder struct (around line 180):
 typedef struct AV1Decoder {
-  // ... existing fields ...
-  
-  // Console API thread configuration
-  uint32_t num_worker_threads;      // Total worker threads for decode
-  uint32_t num_tile_workers;        // Workers for tile parallelism
-  int row_mt_enabled;               // Row-level MT enabled
-  
-  // ... rest of existing fields ...
+    // ... existing fields ...
+    
+    // Console API thread control
+    int console_num_threads;        // Requested thread count
+    int console_row_mt;             // Row-multithreading enabled
+    
+    // ... rest of existing fields ...
 } AV1Decoder;
 ```
 
-**File: av1/decoder/decoder.c**
-Modify `av1_decoder_create()` to accept thread configuration:
+**File**: `av1/decoder/decoder.c` — Modify `av1_decoder_create()` to respect thread count
 
 ```c
-AV1Decoder *av1_decoder_create_ex(BufferPool *const pool,
-                                   const Av1DecThreadConfig *thread_cfg) {
-  AV1Decoder *volatile const pbi = aom_memalign(32, sizeof(*pbi));
-  if (!pbi) return NULL;
-  
-  // ... existing initialization ...
-  
-  // Apply thread configuration from console API
-  if (thread_cfg) {
-    pbi->max_threads = thread_cfg->num_threads;
-    pbi->row_mt = thread_cfg->enable_row_mt;
+// In av1_decoder_create(), after pool initialization:
+// Current: pbi->max_threads = 0; (uses default)
+//
+// Add console API parameter:
+struct AV1Decoder *av1_decoder_create_console(
+    BufferPool *const pool,
+    int num_threads,
+    int row_mt) {
     
-    // Tile parallelism: if num_threads > 1 and row_mt disabled,
-    // use tile-based parallelism
-    if (thread_cfg->num_threads > 1 && !thread_cfg->enable_row_mt) {
-      pbi->tile_mt_info.alloc_tile_rows = 1;
-      pbi->tile_mt_info.alloc_tile_cols = thread_cfg->num_threads;
+    AV1Decoder *pbi = // ... existing allocation code ...
+    
+    // Console API thread configuration
+    pbi->console_num_threads = num_threads;
+    pbi->console_row_mt = row_mt;
+    
+    // Map to AOM internal threading
+    // num_threads controls both tile parallelism and row-mt
+    if (num_threads > 1) {
+        pbi->row_mt = row_mt ? 1 : 0;
+        pbi->max_threads = num_threads;
+    } else {
+        pbi->row_mt = 0;
+        pbi->max_threads = 1;
     }
-  }
-  
-  // ... rest of initialization ...
+    
+    // ... rest of existing initialization ...
 }
 ```
 
-**File: aom/aom_decoder.h**
-Add thread configuration to init config:
+**File**: `av1/decoder/decodeframe.c` — Worker thread setup (reference for modifications)
 
 ```c
-typedef struct aom_codec_dec_cfg {
-  unsigned int threads;              // Maximum number of threads to use
-  unsigned int w;                    // Width
-  unsigned int h;                    // Height
-  unsigned int allow_lowbitdepth;    // Allow low-bitdepth coding path
-  // Console API additions:
-  unsigned int enable_row_mt;        // Enable row-level multithreading
-  unsigned int tile_parallel;        // Enable tile parallelism
-} aom_codec_dec_cfg_t;
+// In decodeframe.c, the function av1_decode_tg_tiles_and_wrapup()
+// handles tile worker distribution. This is where console API
+// thread count takes effect.
+//
+// Key function to understand:
+// void av1_decode_tiles(AV1Decoder *pbi, const uint8_t *data, ...)
+//
+// For console API, you may want to:
+// 1. Limit worker count via pbi->num_workers
+// 2. Disable row-mt if console requests single-threaded decode
+// 3. Add synchronization points for non-blocking constraint
 ```
 
 ### Gotchas
-
-1. **Thread count vs parallelism**: AOM's threading model is complex. `threads` controls total workers, but `row_mt` enables row-level parallelism. For console API, you may want to expose these as separate controls.
-
-2. **Worker thread creation**: Creating workers is expensive. Don't re-create on every frame. The VP9 port kept workers alive across frames.
-
-3. **Synchronization**: AOM uses barriers for worker synchronization. If you add your own copy thread, you need to coordinate with AOM's workers to avoid race conditions on output buffers.
-
-4. **Memory usage**: More threads = more memory for thread-local data (MC buffers, etc.). The memory query function must account for this.
+- **Tile vs. row parallelism**: AV1 supports two levels of parallelism:
+  - Tile parallelism: Each tile decoded by separate worker
+  - Row-MT: Superblock rows decoded in parallel within a tile
+- **Thread count mapping**: AOM's `threads` config in `aom_codec_dec_cfg_t` controls both. For console API, you may want explicit control.
+- **Worker synchronization**: The console API's non-blocking requirement means workers must not block the caller thread. AOM currently uses `winterface->sync()` which can block.
+- **Loop filter is separate**: The loop filter runs on `pbi->lf_worker` after tile decode completes. This is a synchronization point.
 
 ---
 
 ## Area 4: Decode Pipeline Split
 
 ### VP9 Pattern (from reports)
-The critical split is between header parsing (which must be synchronous/non-blocking on the caller thread) and tile decoding (which can be asynchronous on workers). This ensures the caller can submit the next AU while the previous one is being decoded.
+The critical split separates header parsing (on caller thread) from tile decoding (on workers). This enables non-blocking decode.
 
 ### AOM Equivalent
 **Files involved:**
-- `av1/decoder/obu.c` — OBU parsing: `aom_decode_frame_from_obus()`
-- `av1/decoder/obu.h` — Function declarations
-- `av1/decoder/decodeframe.c` — Tile decoding: `av1_decode_tg_tiles_and_wrapup()`
-- `av1/decoder/decoder.c` — `av1_receive_compressed_data()`
+- `av1/decoder/obu.c` — OBU parsing and frame header decode
+- `av1/decoder/decodeframe.c` — Tile decoding
+- `av1/decoder/decoder.h` — `av1_receive_compressed_data()` declaration
 
-**Key functions:**
-- `aom_decode_frame_from_obus()` — Parses OBUs, decodes frame headers, sets up decode
-- `av1_decode_tg_tiles_and_wrapup()` — Decodes tile groups (can be worker-parallel)
-- `av1_decode_frame_headers_and_setup()` — Header parsing + preparation (stays on caller thread)
+**Key AOM functions:**
+- `aom_decode_frame_from_obus()` — Top-level frame decode (obu.c)
+- `av1_decode_frame_headers_and_setup()` — Parse headers, setup (obu.c)
+- `av1_decode_tg_tiles_and_wrapup()` — Decode tiles, run post-filter (decodeframe.c)
 
 ### Modifications Required
 
-**File: av1/decoder/obu.h**
-Expose the split functions for console API:
+**File**: `av1/decoder/obu.h` — Add split-phase API
 
 ```c
-// Parse OBUs and decode frame headers (synchronous, caller thread)
-// Returns: 1 = frame decoded, 0 = no frame, -1 = error
-int av1_decode_frame_headers_and_setup(AV1Decoder *pbi,
-                                        const uint8_t *data,
-                                        const uint8_t *data_end,
-                                        const uint8_t **p_data_end);
+// Add to obu.h for console API split decode
 
-// Decode tile groups (can be asynchronous if workers available)
-// Must be called after header parsing completes
-int av1_decode_tg_tiles_and_wrapup(AV1Decoder *pbi);
+// Phase 1: Parse headers only (non-blocking, stays on caller thread)
+typedef struct Av1DecodeHeadersResult {
+    int frame_found;           // 1 if a frame was parsed
+    int frame_width;
+    int frame_height;
+    int is_keyframe;
+    int num_tiles;
+    int tile_rows;
+    int tile_cols;
+    // ... other header info ...
+} Av1DecodeHeadersResult;
+
+Av1DecodeHeadersResult av1_decode_frame_headers(
+    AV1Decoder *pbi,
+    const uint8_t *data,
+    size_t size,
+    size_t *bytes_consumed);
+
+// Phase 2: Decode tiles (can be async on workers)
+int av1_decode_tiles_async(
+    AV1Decoder *pbi,
+    const uint8_t *data,
+    size_t size,
+    size_t header_bytes_consumed);
+
+// Phase 3: Get output after workers complete
+int av1_decode_get_output(AV1Decoder *pbi);
 ```
 
-**File: av1/decoder/obu.c**
-Modify to support the split:
+**File**: `av1/decoder/obu.c` — Implement split-phase decode
 
 ```c
-// This function already exists - it calls both header parse and tile decode
-// For console API, we need to split these
-
-int av1_console_decode_frame(AV1Decoder *pbi,
-                              const uint8_t *data,
-                              size_t size,
-                              int *frame_decoded) {
-  const uint8_t *data_end = data + size;
-  
-  // Phase 1: Header parsing (synchronous, caller thread)
-  // This validates the bitstream and sets up decode context
-  int parse_result = aom_decode_frame_from_obus(pbi, data, data_end, &data_end);
-  
-  if (parse_result < 0) {
-    return -1;  // Error
-  }
-  
-  if (parse_result == 0) {
-    *frame_decoded = 0;
-    return 0;  // No frame to decode
-  }
-  
-  // At this point, frame headers are parsed and decode is set up
-  // Tile decoding can now proceed (possibly async)
-  
-  // For console API, we return here and let tiles decode async
-  // The caller will call av1_console_decode_tiles() later
-  *frame_decoded = 1;
-  return 0;
+// Current flow in aom_decode_frame_from_obus():
+// 1. Read temporal delimiter
+// 2. Read sequence header (if needed)
+// 3. Read frame header -> av1_decode_frame_headers_and_setup()
+// 4. Read tile group -> av1_decode_tg_tiles_and_wrapup()
+// 5. Post-filter (loop filter, cdef, restoration)
+//
+// For console API, split after step 3:
+//
+// av1_decode_frame_headers() - Phase 1
+Av1DecodeHeadersResult av1_decode_frame_headers(
+    AV1Decoder *pbi,
+    const uint8_t *data,
+    size_t size,
+    size_t *bytes_consumed) {
+    
+    Av1DecodeHeadersResult result = {0};
+    
+    // Parse OBUs up to and including frame header
+    // (extract from existing aom_decode_frame_from_obus logic)
+    
+    // Return header info without decoding tiles
+    result.frame_found = 1;
+    result.frame_width = pbi->common.width;
+    result.frame_height = pbi->common.height;
+    result.num_tiles = pbi->tile_count_minus_1 + 1;
+    result.tile_rows = pbi->tile_rows;
+    result.tile_cols = pbi->tile_cols;
+    
+    *bytes_consumed = /* bytes consumed by headers */;
+    
+    return result;
 }
 
-// Tile decoding (can be async)
-int av1_console_decode_tiles(AV1Decoder *pbi) {
-  // This is essentially what happens inside av1_decode_tg_tiles_and_wrapup
-  // but we expose it separately for async pipeline
-  
-  if (pbi->num_workers > 1) {
-    // Launch tile workers
-    av1_launch_tile_workers(pbi);
-    // Wait for completion
-    av1_sync_tile_workers(pbi);
-  } else {
-    // Single-threaded decode
-    av1_decode_tg_tiles_and_wrapup(pbi);
-  }
-  
-  return 0;
-}
-```
-
-**File: av1/decoder/decoder.c**
-Modify `av1_receive_compressed_data()` to support split operation:
-
-```c
-int av1_receive_compressed_data(AV1Decoder *pbi, size_t size,
-                                const uint8_t **psource) {
-  // ... existing setup ...
-  
-  // For console API mode, we might want to return early after header parse
-  // This allows the caller to submit next AU while tiles decode
-  
-  int frame_decoded = aom_decode_frame_from_obus(pbi, source, source + size, psource);
-  
-  if (frame_decoded < 0) {
-    // Error
-    return 1;
-  }
-  
-  if (frame_decoded == 0) {
-    // No frame decoded (e.g., only temporal delimiter)
-    return 0;
-  }
-  
-  // Frame headers parsed, tiles ready to decode
-  // In console API, tiles will decode async
-  // For now, we continue with synchronous decode
-  
-  // ... existing tile decode and buffer update ...
-  
-  return 0;
+// av1_decode_tiles_async() - Phase 2
+int av1_decode_tiles_async(
+    AV1Decoder *pbi,
+    const uint8_t *data,
+    size_t size,
+    size_t header_bytes_consumed) {
+    
+    // Continue from where headers left off
+    // Call av1_decode_tg_tiles_and_wrapup() with remaining data
+    // This runs on worker threads
+    
+    return av1_decode_tg_tiles_and_wrapup(pbi, 
+        data + header_bytes_consumed, 
+        size - header_bytes_consumed);
 }
 ```
 
 ### Gotchas
-
-1. **Header dependency**: Tile decoding cannot start until header parsing is complete. The split is safe because AV1 frame headers don't depend on tile data.
-
-2. **Reference frame access**: If you're doing async tile decode, you must ensure reference frames are not modified while workers are reading them. AOM handles this via reference counting.
-
-3. **Error propagation**: If header parsing finds an error, you must not proceed to tile decode. The error must propagate to the caller before any async work starts.
-
-4. **State consistency**: After header parsing but before tile decode completes, the decoder is in a "pending" state. The console API must track this to prevent invalid operations (e.g., getting output before decode completes).
+- **State machine**: AV1 decoder has internal state (`pbi->need_resync`, `pbi->seen_frame_header`). Split-phase decode must preserve this.
+- **Reference frame setup**: `av1_decode_frame_headers_and_setup()` sets up reference frames. This must complete before tile decode.
+- **Tile data access**: Tile data starts after frame header. The split must know exact byte offset.
+- **Error handling**: If header parse fails, tiles should not be dispatched.
 
 ---
 
 ## Area 5: Queue / Pipeline Management
 
 ### VP9 Pattern (from reports)
-The VP9 port used a job queue (ring buffer) between caller and worker threads. It tracked in-flight frames and had backpressure logic (QUEUE_FULL) when the pipeline was saturated.
+VP9 used a job queue between caller and workers with ring buffer design, backpressure (QUEUE_FULL), and in-flight frame tracking.
 
 ### AOM Equivalent
 **Files involved:**
-- `av1/decoder/decoder.h` — `AV1DecTileMT` for tile job queue
-- `av1/decoder/decoder.c` — Job queue management in tile workers
-- `av1/decoder/decodeframe.c` — Worker job execution
+- `av1/decoder/decoder.h` — `AV1DecTileMT` struct for tile job queue
+- `av1/decoder/decoder.c` — Job allocation/deallocation
 
-**Key structures:**
-- `AV1DecTileMT` — Tile job queue management
-- `TileJobsDec` — Individual tile job
-- `AV1DecRowMTInfo` — Row-level MT job tracking
+**Key AOM structures:**
+- `AV1DecTileMT` — Tile job queue (decoder.h line ~130)
+- `TileJobsDec` — Individual tile job (decoder.h line ~125)
+- `pbi->tile_mt_info` — Multi-threaded tile info
 
 ### Modifications Required
 
-**File: av1/decoder/decoder.h**
-Add console API job queue tracking:
+**File**: `av1/decoder/decoder.h` — Add console API job queue
 
 ```c
+// Add to AV1Decoder struct for console API
+
+typedef struct Av1ConsoleJobQueue {
+    // Ring buffer for decode jobs
+    void **jobs;               // Array of job pointers
+    int job_capacity;          // Max jobs (power of 2)
+    int job_head;              // Next job to process
+    int job_tail;              // Next free slot
+    
+    // Synchronization
+    void *lock;                // Queue lock
+    void *not_empty;           // Signal for workers
+    void *not_full;            // Signal for caller
+    
+    // Status
+    int num_pending;           // Jobs waiting to start
+    int num_in_flight;         // Jobs currently processing
+    int num_completed;         // Jobs finished, awaiting output
+    
+} Av1ConsoleJobQueue;
+
+// Add to AV1Decoder
 typedef struct AV1Decoder {
-  // ... existing fields ...
-  
-  // Console API: job queue tracking
-  int console_api_mode;              // Enable console API job management
-  uint32_t max_in_flight_frames;     // Max frames in pipeline
-  uint32_t num_in_flight;            // Current frames in pipeline
-  
-  // Frame tracking for console API
-  typedef struct ConsoleFrameJob {
-    uint32_t frame_num;
-    int pending;                     // 1 = headers parsed, tiles pending
-    int complete;                    // 1 = fully decoded
-    int error;                       // Error code if any
-  } ConsoleFrameJob;
-  
-  ConsoleFrameJob *frame_jobs;
-  uint32_t frame_jobs_size;
-  uint32_t frame_jobs_head;
-  uint32_t frame_jobs_tail;
-  
-  // ... rest of existing fields ...
+    // ... existing fields ...
+    
+    // Console API job queue
+    Av1ConsoleJobQueue *console_job_queue;
+    int console_queue_depth;   // Max pending frames
+    
+    // ... rest of existing fields ...
 } AV1Decoder;
 ```
 
-**File: av1/decoder/decoder.c**
-Implement job queue management:
+**File**: `av1/decoder/decoder.c` — Implement job queue
 
 ```c
-// Submit frame for async decode
-int av1_console_submit_frame(AV1Decoder *pbi, 
-                              const uint8_t *data, 
-                              size_t size,
-                              uint32_t *frame_id) {
-  // Check backpressure
-  if (pbi->num_in_flight >= pbi->max_in_flight_frames) {
-    return AV1_DEC_ERR_QUEUE_FULL;
-  }
-  
-  // Parse headers synchronously
-  int result = aom_decode_frame_from_obus(pbi, data, data + size, &data);
-  if (result <= 0) {
-    return result < 0 ? AV1_DEC_ERR_BITSTREAM : AV1_DEC_SUCCESS;
-  }
-  
-  // Allocate frame slot
-  uint32_t slot = pbi->frame_jobs_tail;
-  pbi->frame_jobs[slot].frame_num = pbi->frame_count++;
-  pbi->frame_jobs[slot].pending = 1;
-  pbi->frame_jobs[slot].complete = 0;
-  pbi->frame_jobs[slot].error = 0;
-  
-  pbi->frame_jobs_tail = (slot + 1) % pbi->frame_jobs_size;
-  pbi->num_in_flight++;
-  
-  if (frame_id) *frame_id = pbi->frame_jobs[slot].frame_num;
-  
-  // Launch async tile decode
-  if (pbi->num_workers > 1) {
-    av1_launch_tile_workers(pbi);
-  } else {
-    av1_decode_tg_tiles_and_wrapup(pbi);
-    pbi->frame_jobs[slot].complete = 1;
-  }
-  
-  return AV1_DEC_SUCCESS;
+// Job queue implementation
+int av1_console_job_queue_init(Av1ConsoleJobQueue *q, int capacity) {
+    q->jobs = (void **)calloc(capacity, sizeof(void *));
+    if (!q->jobs) return -1;
+    
+    q->job_capacity = capacity;
+    q->job_head = q->job_tail = 0;
+    q->num_pending = q->num_in_flight = q->num_completed = 0;
+    
+    // Initialize synchronization primitives
+    // (platform-specific: pthread_mutex_t, etc.)
+    
+    return 0;
 }
 
-// Check if any frame is complete
-int av1_console_poll_completed(AV1Decoder *pbi, 
-                                uint32_t *completed_frame_id) {
-  uint32_t slot = pbi->frame_jobs_head;
-  
-  while (slot != pbi->frame_jobs_tail) {
-    if (pbi->frame_jobs[slot].complete) {
-      if (completed_frame_id) {
-        *completed_frame_id = pbi->frame_jobs[slot].frame_num;
-      }
-      
-      // Remove from queue
-      pbi->frame_jobs[slot].complete = 0;
-      pbi->frame_jobs_head = (slot + 1) % pbi->frame_jobs_size;
-      pbi->num_in_flight--;
-      
-      return 1;  // Found completed frame
+int av1_console_job_queue_push(Av1ConsoleJobQueue *q, void *job) {
+    // Check for backpressure
+    if (q->num_pending + q->num_in_flight >= q->job_capacity) {
+        return -1; // QUEUE_FULL
     }
     
-    // Check if async decode finished
-    if (pbi->frame_jobs[slot].pending && pbi->num_workers > 1) {
-      if (av1_tile_workers_done(pbi)) {
-        pbi->frame_jobs[slot].complete = 1;
-        pbi->frame_jobs[slot].pending = 0;
-      }
+    // Add job to queue
+    q->jobs[q->job_tail] = job;
+    q->job_tail = (q->job_tail + 1) & (q->job_capacity - 1);
+    q->num_pending++;
+    
+    // Signal workers
+    // (platform-specific: pthread_cond_signal)
+    
+    return 0;
+}
+
+void *av1_console_job_queue_pop(Av1ConsoleJobQueue *q) {
+    // Wait for job (blocking)
+    while (q->num_pending == 0) {
+        // Wait on not_empty condition
     }
     
-    slot = (slot + 1) % pbi->frame_jobs_size;
-  }
-  
-  return 0;  // No completed frames
+    void *job = q->jobs[q->job_head];
+    q->job_head = (q->job_head + 1) & (q->job_capacity - 1);
+    q->num_pending--;
+    q->num_in_flight++;
+    
+    return job;
+}
+
+void av1_console_job_queue_complete(Av1ConsoleJobQueue *q, void *job) {
+    q->num_in_flight--;
+    q->num_completed++;
+    // Signal caller that output is ready
 }
 ```
 
 ### Gotchas
-
-1. **Queue size**: The VP9 port used a fixed-size ring buffer. For console API, you need to balance memory usage (queue size) against backpressure frequency.
-
-2. **Frame ordering**: AV1 can output frames out of decode order (due to temporal dependencies). The console API should return frames in presentation order, which may require reordering logic.
-
-3. **Worker synchronization**: If using AOM's internal workers, you need to check if they're done before marking a frame complete. Use `av1_worker_sync()`.
-
-4. **Error handling**: If a frame in the middle of the pipeline errors, you need to decide whether to drain the rest or fail fast. VP9 chose to mark the error and continue.
+- **Backpressure handling**: If queue is full, `DecodeAu` should return `AV1_CONSOLE_DEC_ERR_QUEUE_FULL` (or block). VP9 removed this error, but console API may need it.
+- **In-flight tracking**: Must track frames currently being decoded (not just queued) to know when DPB can be modified.
+- **Output ordering**: AV1 outputs in presentation order (PTS), which may differ from decode order. The queue must handle this.
 
 ---
 
 ## Area 6: Reference Frame / DPB Changes
 
 ### VP9 Pattern (from reports)
-The VP9 port managed DPB slots explicitly. With async pipeline, reference frames must be held until all dependent frames are decoded, then released. AOM uses reference counting which handles this automatically.
+VP9's DPB management needed careful reference counting with async pipeline. AV1 uses `RefCntBuffer` with `ref_count` field.
 
 ### AOM Equivalent
 **Files involved:**
 - `av1/common/av1_common_int.h` — `AV1_COMMON` struct with DPB
-- `av1/common/refcnt.h` — `RefCntBuffer` reference counting
-- `av1/decoder/decoder.h` — `AV1Decoder` with `ref_frame_map`
-- `av1/decoder/decoder.c` — `update_frame_buffers()` manages DPB
+- `av1/common/av1_common_int.h` — `RefCntBuffer` struct
+- `av1/decoder/decoder.c` — `update_frame_buffers()` function
 
-**Key structures:**
-- `RefCntBuffer` — Reference-counted frame buffer
-- `ref_frame_map[8]` — DPB slots in `AV1_COMMON`
-- `cur_frame` — Current frame being decoded
+**Key AOM structures:**
+- `RefCntBuffer` — Reference counted frame buffer (av1_common_int.h)
+- `cm->ref_frame_map[8]` — DPB slots (av1_common_int.h)
+- `cm->cur_frame` — Current frame being decoded
+- `pbi->output_frames[]` — Output queue (decoder.h line ~175)
 
 ### Modifications Required
 
-**File: av1/common/av1_common_int.h**
-Add console API DPB tracking:
+**File**: `av1/common/av1_common_int.h` — Reference frame management
 
 ```c
-typedef struct AV1Common {
-  // ... existing fields ...
-  
-  // Console API: track reference holdings for async pipeline
-  int console_dpb_hold_refs;         // Don't release until explicitly told
-  
-  // ... rest of existing fields ...
-} AV1Common;
+// RefCntBuffer structure (existing, for reference):
+typedef struct RefCntBuffer {
+    YV12_BUFFER_CONFIG buf;
+    int ref_count;
+    int order_hint;
+    FrameIndex frame_index;
+    // ... other fields ...
+} RefCntBuffer;
+
+// Console API: Add reference tracking for async pipeline
+typedef struct Av1ConsoleRefTracker {
+    // Track which DPB slots are "locked" for async decode
+    int locked_slots[8];       // 1 if slot is in use by worker
+    int num_locked;
+    
+    // Pending reference releases (to apply after workers finish)
+    int pending_release[8];
+    int num_pending_release;
+    
+    // Current frame reference (held during tile decode)
+    RefCntBuffer *cur_frame_ref;
+    
+} Av1ConsoleRefTracker;
 ```
 
-**File: av1/decoder/decoder.c**
-Modify `update_frame_buffers()` to support console API hold:
+**File**: `av1/decoder/decoder.c` — Modify `update_frame_buffers()` for async
 
 ```c
-static void update_frame_buffers(AV1Decoder *pbi, int frame_decoded) {
-  AV1_COMMON *const cm = &pbi->common;
-  BufferPool *const pool = cm->buffer_pool;
-  
-  if (frame_decoded) {
-    lock_buffer_pool(pool);
+// Current function (line ~380):
+// static void update_frame_buffers(AV1Decoder *pbi, int frame_decoded)
+//
+// For console API async pipeline, add:
+// 1. Lock reference frames before dispatching to workers
+// 2. Release locks after workers complete
+
+void av1_console_lock_references(AV1Decoder *pbi) {
+    AV1_COMMON *cm = &pbi->common;
+    BufferPool *pool = cm->buffer_pool;
     
-    // Standard DPB update
-    // ... (existing code) ...
-    
-    // Console API: if hold enabled, don't release reference
-    // This keeps the frame in DPB until caller explicitly releases
-    if (!cm->console_dpb_hold_refs) {
-      // Normal release behavior
-      // ... (existing code) ...
+    // Lock all reference frames that will be needed
+    for (int i = 0; i < INTER_REFS_PER_FRAME; i++) {
+        int ref_idx = cm->remapped_ref_idx[i];
+        if (ref_idx >= 0 && cm->ref_frame_map[ref_idx]) {
+            RefCntBuffer *buf = cm->ref_frame_map[ref_idx];
+            lock_buffer_pool(pool);
+            buf->ref_count++;
+            unlock_buffer_pool(pool);
+        }
     }
-    
-    unlock_buffer_pool(pool);
-  }
-  
-  // ... rest of function ...
 }
 
-// Console API: explicitly release reference
-int av1_console_release_frame(AV1Decoder *pbi, int frame_idx) {
-  AV1_COMMON *const cm = &pbi->common;
-  BufferPool *const pool = cm->buffer_pool;
-  
-  if (frame_idx < 0 || frame_idx >= REF_FRAMES) {
-    return -1;
-  }
-  
-  RefCntBuffer *buf = cm->ref_frame_map[frame_idx];
-  if (!buf) return 0;
-  
-  lock_buffer_pool(pool);
-  decrease_ref_count(buf, pool);
-  unlock_buffer_pool(pool);
-  
-  cm->ref_frame_map[frame_idx] = NULL;
-  return 0;
+void av1_console_unlock_references(AV1Decoder *pbi) {
+    AV1_COMMON *cm = &pbi->common;
+    BufferPool *pool = cm->buffer_pool;
+    
+    // Unlock reference frames after workers complete
+    for (int i = 0; i < INTER_REFS_PER_FRAME; i++) {
+        int ref_idx = cm->remapped_ref_idx[i];
+        if (ref_idx >= 0 && cm->ref_frame_map[ref_idx]) {
+            RefCntBuffer *buf = cm->ref_frame_map[ref_idx];
+            lock_buffer_pool(pool);
+            decrease_ref_count(buf, pool);
+            unlock_buffer_pool(pool);
+        }
+    }
 }
 ```
 
 ### Gotchas
-
-1. **Reference counting**: AOM's `decrease_ref_count()` automatically frees the buffer when count reaches zero. This is correct for normal operation.
-
-2. **Async pipeline hazard**: With async decode, a frame might still be needed as reference while the next frame is being decoded. AOM's reference counting handles this—each frame that uses a reference increments the count.
-
-3. **Output vs reference**: A frame can be both output (shown) and used as reference. The console API must not release a reference frame until all dependent frames are decoded.
-
-4. **Film grain**: If film grain is applied, the grain parameters are stored in the frame buffer. The output copy must include grain parameters, not just pixel data.
+- **Reference lifetime**: Reference frames must not be modified or recycled while workers are using them. The console API must hold extra references during tile decode.
+- **DPB size**: AV1 supports up to 7 reference frames + current. Console API's `QueryMemory` must account for this.
+- **Output vs. reference**: Frames in `pbi->output_frames[]` are for display, not reference. Don't confuse the two.
+- **Film grain**: Film grain is applied at output time, not stored in DPB. This is handled separately.
 
 ---
 
 ## Area 7: Bitstream Parsing Changes
 
 ### VP9 Pattern (from reports)
-OBU parsing must stay on the caller thread to satisfy non-blocking constraint. The Temporal Delimiter, Sequence Header, and Frame Header are parsed synchronously; Tile Groups can be parsed and decoded asynchronously.
+AV1 uses OBU (OBject Unit) parsing instead of VP9's frame superframe structure. Key OBUs: Temporal Delimiter, Sequence Header, Frame Header, Tile Group.
 
 ### AOM Equivalent
 **Files involved:**
-- `av1/decoder/obu.c` — OBU parsing: `aom_decode_frame_from_obus()`, `av1_parse_obu_header()`
-- `av1/decoder/obu.h` — OBU parsing functions
-- `av1/decoder/decoder.h` — `DataBuffer` for OBU data
+- `av1/decoder/obu.h` — OBU parsing declarations
+- `av1/decoder/obu.c` — OBU parsing implementation
+- `av1/decoder/obu.h` — `aom_decode_frame_from_obus()` function
 
-**Key functions:**
-- `aom_decode_frame_from_obus()` — Main entry, parses all OBUs
-- `av1_parse_obu_header()` — Parses OBU header (type, size)
-- `av1_parse_sequence_header()` — Parses Sequence Header OBU
-- `av1_parse_frame_header()` — Parses Frame Header OBU
+**Key AOM functions:**
+- `aom_decode_frame_from_obus()` — Main OBU parsing loop (obu.c)
+- `read_obu_header()` — Parse OBU header
+- `read_sequence_header()` — Parse AV1 sequence header
+- `av1_decode_frame_headers_and_setup()` — Parse frame header
 
 ### Modifications Required
 
-**File: av1/decoder/obu.h**
-Expose parsing functions for console API:
+**File**: `av1/decoder/obu.h` — Add OBU-level access for console API
 
 ```c
-// Parse OBU header only (no decode)
-// Returns: 0 = success, -1 = error
-int av1_parse_obu_header(const uint8_t *data, size_t size,
-                          OBU_TYPE *obu_type, size_t *obu_size);
+// Add OBU type enum for console API (mirrors aom_codec.h)
+typedef enum {
+    AV1_OBU_TEMPORAL_DELIMITER = 2,
+    AV1_OBU_SEQUENCE_HEADER = 1,
+    AV1_OBU_FRAME_HEADER = 3,
+    AV1_OBU_TILE_GROUP = 4,
+    AV1_OBU_METADATA = 5,
+    AV1_OBU_FRAME = 6,
+    AV1_OBU_TILE_LIST = 8,
+} Av1OBUType;
 
-// Parse sequence header (synchronous)
-// Returns: 0 = success, -1 = error  
-int av1_parse_sequence_header(AV1Decoder *pbi, 
-                               const uint8_t *data, 
-                               size_t size);
+// Console API: Parse OBU without decoding
+typedef struct Av1OBUInfo {
+    Av1OBUType type;
+    size_t header_size;
+    size_t payload_size;
+    int has_size_field;        // 1 if size in header, 0 if terminated by size
+} Av1OBUInfo;
 
-// Parse frame header (synchronous)
-// Returns: 0 = success, -1 = error
-int av1_parse_frame_header(AV1Decoder *pbi,
-                            const uint8_t *data,
-                            size_t size,
-                            size_t *header_size);
+Av1OBUInfo av1_parse_obu_header(const uint8_t *data, size_t size);
+
+// Console API: Check if data starts with temporal delimiter (Annex-B sync)
+int av1_is_temporal_delimiter(const uint8_t *data, size_t size);
 ```
 
-**File: av1/decoder/obu.c**
-Add console API parsing entry point:
+**File**: `av1/decoder/obu.c` — Implement OBU parsing helpers
 
 ```c
-// Console API: synchronous OBU parsing
-// This is what runs on the caller thread before async tile decode
-int av1_console_parse_obus(AV1Decoder *pbi,
-                           const uint8_t *data,
-                           size_t size,
-                           int *is_keyframe,
-                           int *frame_decoded) {
-  const uint8_t *data_end = data + size;
-  
-  // Parse OBUs until we hit a frame
-  while (data < data_end) {
-    OBU_TYPE obu_type;
-    size_t obu_size;
+// av1_parse_obu_header() implementation
+Av1OBUInfo av1_parse_obu_header(const uint8_t *data, size_t size) {
+    Av1OBUInfo info = {0};
     
-    if (av1_parse_obu_header(data, data_end - data, &obu_type, &obu_size) < 0) {
-      return AV1_DEC_ERR_OBU_ERROR;
+    if (size < 2) return info; // Need at least OBU header
+    
+    // Parse OBU header (same logic as existing read_obu_header)
+    int obu_has_size_field = (data[0] >> 4) & 1;
+    int obu_type = (data[0] >> 3) & 0xF;
+    
+    info.type = (Av1OBUType)obu_type;
+    info.has_size_field = obu_has_size_field;
+    
+    // Calculate sizes based on extension bytes
+    int extension_bytes = (data[0] & 0x3) + 1;
+    info.header_size = 1 + extension_bytes;
+    
+    if (obu_has_size_field && size > info.header_size) {
+        // Read size from payload
+        info.payload_size = read_uvlc(data + info.header_size);
     }
     
-    switch (obu_type) {
-      case OBU_TEMPORAL_DELIMITER:
-        // No data, just skip
-        break;
-        
-      case OBU_SEQUENCE_HEADER:
-        // Parse sequence header (sets up decoder config)
-        if (av1_parse_sequence_header(pbi, data, obu_size) < 0) {
-          return AV1_DEC_ERR_OBU_ERROR;
-        }
-        break;
-        
-      case OBU_FRAME_HEADER:
-        // Parse frame header (sets up current frame decode)
-        if (av1_parse_frame_header(pbi, data, obu_size, NULL) < 0) {
-          return AV1_DEC_ERR_FRAME_ERROR;
-        }
-        break;
-        
-      case OBU_FRAME:
-      case OBU_TILE_GROUP:
-        // Frame data - stop parsing, return to caller
-        // Tile decode can proceed asynchronously
-        *frame_decoded = 1;
-        *is_keyframe = (pbi->common.frame_type == KEY_FRAME);
-        return 0;
-        
-      default:
-        // Skip unknown OBUs
-        break;
-    }
+    return info;
+}
+
+// av1_is_temporal_delimiter() - for Annex-B resync
+int av1_is_temporal_delimiter(const uint8_t *data, size_t size) {
+    if (size < 1) return 0;
     
-    data += obu_size;
-  }
-  
-  *frame_decoded = 0;
-  return 0;
+    // Temporal delimiter is OBU type 2 with no payload
+    return (data[0] >> 3) == 2;
 }
 ```
 
 ### Gotchas
-
-1. **Sequence header changes**: If the sequence header changes mid-stream (resolution, profile, etc.), AOM reinitializes internal buffers. The console API must handle this and may need to flush pending frames.
-
-2. **Temporal delimiter**: Every temporal unit starts with a temporal delimiter OBU. This is important for console API to detect frame boundaries.
-
-3. **Tile group parsing**: The tile group OBU contains the actual compressed data. Parsing the tile group header (to get tile positions) can be done synchronously, but tile data decode is async.
-
-4. **Annex-B vs IVF**: The console API must handle both. Annex-B has explicit start codes; IVF has frame sizes in the container. The wrapper detects format and handles appropriately.
+- **OBU vs. frame**: AV1 bitstream is a stream of OBUs, not frames. A "frame" OBU contains the actual compressed frame data.
+- **Sequence header persistence**: Once read, sequence header applies to all subsequent frames until a new one appears.
+- **Annex-B resync**: In Annex-B format, a temporal delimiter OBU signals frame boundary. The console API may need to scan for this on decode errors.
+- **Tile group**: A frame can have multiple tile groups. The console API's `DecodeAu` should handle one Access Unit (one or more tile groups).
 
 ---
 
 ## Area 8: Post-Processing / Filtering
 
 ### VP9 Pattern (from reports)
-Loop filter, CDEF, and loop restoration run on worker threads in AOM. Film grain application happens on the output buffer (not in DPB). The console API needs to ensure these complete before returning output.
+VP9 had loop filter (deblock), CDEF, and restoration. Console API moved some to GPU. In AOM, these run on CPU workers after tile decode.
 
 ### AOM Equivalent
 **Files involved:**
 - `av1/common/av1_loopfilter.h` — Loop filter
 - `av1/common/cdef.h` — CDEF (Constrained Directional Enhancement Filter)
-- `av1/common/loop_restoration.h` — Loop restoration
-- `av1/decoder/decoder.h` — `AV1LfSync`, `AV1CdefSync`, `AV1LrSync`
-- `av1/decoder/decodeframe.c` — Post-processing in frame decode
+- `av1/common/restoration.h` — Loop restoration
+- `av1/decoder/decodeframe.c` — Post-filter chain
 
-**Key functions:**
-- `av1_loop_filter_frame()` — Apply loop filter
-- `av1_cdef_frame()` — Apply CDEF
-- `av1_loop_restoration_save_deblock()` — Prepare for restoration
-- `av1_loop_restoration_filter_frame()` — Apply restoration
+**Key AOM functions:**
+- `av1_loop_filter_frame()` — Deblock filter (decodeframe.c)
+- `av1_cdef_frame()` — CDEF filter (decodeframe.c)
+- `av1_loop_restoration_filter_frame()` — Restoration (decodeframe.c)
+- `av1_decode_tg_tiles_and_wrapup()` — Calls post-filters at end (decodeframe.c)
 
 ### Modifications Required
 
-**File: av1/decoder/decoder.h**
-Add post-processing tracking to `AV1Decoder`:
+**File**: `av1/decoder/decoder.h` — Add console API post-filter control
 
 ```c
+// Add to AV1Decoder for console API control
 typedef struct AV1Decoder {
-  // ... existing fields ...
-  
-  // Console API: post-processing state
-  int postproc_pending;              // Post-processing not yet complete
-  int postproc_lf_done;              // Loop filter done
-  int postproc_cdef_done;            // CDEF done
-  int postproc_lr_done;              // Loop restoration done
-  
-  // ... rest of existing fields ...
+    // ... existing fields ...
+    
+    // Console API post-processing control
+    int console_skip_loop_filter;    // Skip deblock
+    int console_skip_cdef;           // Skip CDEF
+    int console_skip_restoration;    // Skip restoration
+    int console_apply_film_grain;    // Apply film grain at output
+    
+    // Post-filter worker synchronization
+    void *pf_done_event;             // Signal when post-filter complete
+    
+    // ... rest of existing fields ...
 } AV1Decoder;
 ```
 
-**File: av1/decoder/decodeframe.c**
-Ensure post-processing completes before frame is outputtable:
+**File**: `av1/decoder/decodeframe.c` — Add console API bypass
 
 ```c
-// In the frame decode function, after tile decode:
-// This is already how AOM works - postproc is part of frame decode
+// In av1_decode_tg_tiles_and_wrapup(), the post-filter chain is:
+// 1. av1_loop_filter_frame() - deblock
+// 2. av1_cdef_frame() - CDEF  
+// 3. av1_loop_restoration_filter_frame() - restoration
+//
+// For console API, add bypass controls:
 
-static void finish_frame_decode(AV1Decoder *pbi) {
-  AV1_COMMON *cm = &pbi->common;
-  
-  // Loop filter
-  if (cm->loop_filter_level[0] || cm->loop_filter_level[1]) {
-    av1_loop_filter_frame(cm, &pbi->lf_row_sync, 0, 1);
-  }
-  
-  // CDEF
-  if (cm->cdef_enabled) {
-    av1_cdef_frame(cm, pbi->cdef_worker, pbi->cdef_sync, pbi->num_workers);
-  }
-  
-  // Loop restoration
-  if (cm->restoration_type != RESTORE_NONE) {
-    av1_loop_restoration_filter_frame(cm, &pbi->lr_row_sync, 0);
-  }
-  
-  // Film grain (if present) is applied during output copy, not stored in DPB
-  // This is correct - grain is not reference-worthy
-}
-
-// Console API: ensure post-processing is complete before output
-int av1_console_wait_postproc(AV1Decoder *pbi) {
-  // If using workers, sync them
-  if (pbi->num_workers > 1) {
-    // Workers handle post-proc in parallel
-    av1_sync_all_workers(pbi);
-  }
-  
-  // Film grain application happens at output time
-  // (not in DPB, applied to output buffer)
-  
-  return 0;
+void av1_decode_tg_tiles_and_wrapup(AV1Decoder *pbi, ...) {
+    // ... existing tile decode ...
+    
+    // Post-filters (add console API bypass)
+    if (!pbi->console_skip_loop_filter) {
+        av1_loop_filter_frame(cm, &pbi->lf_row_sync, 0, 0);
+    }
+    
+    if (!pbi->console_skip_cdef) {
+        av1_cdef_frame(cm, pbi->cdef_worker, pbi->cdef_sync, 0);
+    }
+    
+    if (!pbi->console_skip_restoration) {
+        av1_loop_restoration_filter_frame(cm, &pbi->lr_row_sync, 0);
+    }
+    
+    // Film grain is applied at output, not here
 }
 ```
 
 ### Gotchas
-
-1. **Parallel post-processing**: Loop filter, CDEF, and restoration can run in parallel with tile decode for subsequent frames. AOM handles this internally.
-
-2. **Film grain timing**: Film grain is NOT stored in the DPB reference frames. It's applied when the frame is output. This is correct per AV1 spec—grain is not reference-worthy.
-
-3. **Output buffer vs DPB**: The console API output must be a copy, not a reference to the DPB buffer, because the DPB buffer may be reused for subsequent frames.
-
-4. **Skip film grain**: Some applications want to skip film grain for performance. The console API should have an option to skip grain application on output.
+- **Post-filter is synchronous**: Currently runs after tile decode completes, on same thread. For console API, you may want to run on separate worker.
+- **Film grain timing**: Film grain is NOT stored in DPB. It's applied when frame is output (in `av1_get_raw_frame()` or output copy).
+- **Skip options**: Console API may want to skip post-processing for faster decode, letting GPU handle it later.
+- **CDEF/restoration can be disabled**: Some profiles don't support these. Check `cm->cdef_enabled`, `cm->restoration_type`.
 
 ---
 
 ## Area 9: Output / Copy Path
 
 ### VP9 Pattern (from reports)
-The console API has SET OUTPUT (register external buffer) and RECEIVE OUTPUT (copy decoded frame to buffer). This includes plane-by-plane copy, format conversion, and film grain application.
+Console API had SET OUTPUT to register external buffer, then RECEIVE OUTPUT to get frame data. Copy thread handled plane-by-plane copy with format conversion.
 
 ### AOM Equivalent
 **Files involved:**
 - `av1/decoder/decoder.c` — `av1_get_raw_frame()`, `av1_get_frame_to_show()`
 - `aom/aom_image.h` — `aom_image_t` structure
-- `aom_scale/yv12config.h` — `YV12_BUFFER_CONFIG` structure
+- `aom_scale/yv12config.h` — `YV12_BUFFER_CONFIG`
 
-**Key structures:**
-- `aom_image_t` — AOM's image format (planes, strides, bit depth)
-- `YV12_BUFFER_CONFIG` — Internal frame buffer format
+**Key AOM structures:**
+- `aom_image_t` — Public image structure (aom_image.h)
+- `YV12_BUFFER_CONFIG` — Internal frame buffer (yv12config.h)
+- `pbi->output_frames[]` — Output queue (decoder.h line ~175)
 
 ### Modifications Required
 
-**File: av1/decoder/decoder.h**
-Add console API output management:
+**File**: `av1/decoder/decoder.c` — Add console API output functions
 
 ```c
-typedef struct AV1Decoder {
-  // ... existing fields ...
-  
-  // Console API: output buffer management
-  void *ext_output_buffer;           // Caller-provided output buffer
-  size_t ext_output_size;            // Buffer size
-  int output_format;                 // Output format (YUV420, NV12, etc.)
-  
-  // Film grain
-  int apply_film_grain;              // Apply film grain to output
-  
-  // ... rest of existing fields ...
-} AV1Decoder;
-```
-
-**File: av1/decoder/decoder.c**
-Implement console API output functions:
-
-```c
-// Set external output buffer
-int av1_console_set_output(AV1Decoder *pbi, 
-                           void *buffer, 
-                           size_t size,
-                           int format) {
-  pbi->ext_output_buffer = buffer;
-  pbi->ext_output_size = size;
-  pbi->output_format = format;
-  return 0;
-}
-
-// Get output frame (copy to external buffer)
-int av1_console_get_output(AV1Decoder *pbi,
-                           Av1DecOutput *output) {
-  YV12_BUFFER_CONFIG *frame = NULL;
-  aom_film_grain_t *grain = NULL;
-  
-  // Get frame from output queue
-  if (av1_get_raw_frame(pbi, 0, &frame, &grain) < 0) {
-    return AV1_DEC_ERR_NO_OUTPUT;
-  }
-  
-  if (!frame) {
-    return AV1_DEC_SUCCESS;  // No output available
-  }
-  
-  // Verify buffer size
-  size_t required_size = av1_calculate_output_size(frame, pbi->output_format);
-  if (required_size > pbi->ext_output_size) {
-    return AV1_DEC_ERR_BUF_TOO_SMALL;
-  }
-  
-  // Copy frame to output buffer
-  if (pbi->output_format == AV1_DEC_OUTPUT_YUV420) {
-    copy_yuv420(frame, pbi->ext_output_buffer);
-  } else if (pbi->output_format == AV1_DEC_OUTPUT_NV12) {
-    copy_yuv420_to_nv12(frame, pbi->ext_output_buffer);
-  }
-  
-  // Apply film grain if requested and present
-  if (pbi->apply_film_grain && grain && grain->apply_grain) {
-    apply_film_grain(frame, grain, pbi->ext_output_buffer, pbi->output_format);
-  }
-  
-  // Fill output info
-  output->width = frame->y_width;
-  output->height = frame->y_height;
-  output->pts = frame->pts;
-  output->timestamp = frame->timestamp;
-  
-  return 1;  // Frame returned
-}
-
-// Helper: calculate required output buffer size
-size_t av1_calculate_output_size(YV12_BUFFER_CONFIG *frame, int format) {
-  size_t y_size = frame->y_stride * frame->y_height;
-  size_t uv_size = frame->uv_stride * frame->uv_height;
-  
-  if (format == AV1_DEC_OUTPUT_YUV420) {
-    return y_size + 2 * uv_size;
-  } else if (format == AV1_DEC_OUTPUT_NV12) {
-    // NV12 has Y plane + interleaved UV
-    return y_size + frame->uv_stride * frame->uv_height * 2;
-  }
-  
-  return y_size + 2 * uv_size;
-}
-
-// Copy YUV420 planar
-static void copy_yuv420(YV12_BUFFER_CONFIG *src, uint8_t *dst) {
-  // Y plane
-  for (int y = 0; y < src->y_height; y++) {
-    memcpy(dst + y * src->y_width,
-           src->y_buffer + y * src->y_stride,
-           src->y_width);
-  }
-  
-  // U plane
-  uint8_t *dst_u = dst + src->y_width * src->y_height;
-  for (int y = 0; y < src->uv_height; y++) {
-    memcpy(dst_u + y * src->uv_width,
-           src->u_buffer + y * src->uv_stride,
-           src->uv_width);
-  }
-  
-  // V plane
-  uint8_t *dst_v = dst_u + src->uv_width * src->uv_height;
-  for (int y = 0; y < src->uv_height; y++) {
-    memcpy(dst_v + y * src->uv_width,
-           src->v_buffer + y * src->uv_stride,
-           src->uv_width);
-  }
-}
-
-// Copy YUV420 to NV12 (semi-planar)
-static void copy_yuv420_to_nv12(YV12_BUFFER_CONFIG *src, uint8_t *dst) {
-  // Y plane (same as YUV420)
-  for (int y = 0; y < src->y_height; y++) {
-    memcpy(dst + y * src->y_width,
-           src->y_buffer + y * src->y_stride,
-           src->y_width);
-  }
-  
-  // UV interleaved
-  uint8_t *dst_uv = dst + src->y_width * src->y_height;
-  for (int y = 0; y < src->uv_height; y++) {
-    uint8_t *src_u = src->u_buffer + y * src->uv_stride;
-    uint8_t *src_v = src->v_buffer + y * src->uv_stride;
-    uint8_t *dst_row = dst_uv + y * src->uv_width * 2;
+// Console API: Get output frame info without copying
+Av1ConsoleDecReturn av1_console_get_output_info(
+    AV1Decoder *pbi,
+    Av1ConsoleDecOutputInfo *info) {
     
-    for (int x = 0; x < src->uv_width; x++) {
-      dst_row[x * 2] = src_u[x];
-      dst_row[x * 2 + 1] = src_v[x];
+    if (pbi->num_output_frames == 0)
+        return AV1_CONSOLE_DEC_ERR_INVALID_CTX;
+    
+    RefCntBuffer *buf = pbi->output_frames[pbi->num_output_frames - 1];
+    YV12_BUFFER_CONFIG *sd = &buf->buf;
+    
+    info->frameWidth = sd->y_width;
+    info->frameHeight = sd->y_height;
+    info->bitDepth = (sd->flags & YV12_FLAG_HIGHBITDEPTH) ? 10 : 8;
+    info->chromaFormat = 0; // 420
+    info->pts = buf->buf.pts;
+    
+    return AV1_CONSOLE_DEC_SUCCESS;
+}
+
+// Console API: Copy frame to user buffer
+Av1ConsoleDecReturn av1_console_copy_output(
+    AV1Decoder *pbi,
+    void *user_buffer,
+    uint32_t buffer_size,
+    uint32_t *bytes_written) {
+    
+    if (pbi->num_output_frames == 0)
+        return AV1_CONSOLE_DEC_ERR_INVALID_CTX;
+    
+    RefCntBuffer *buf = pbi->output_frames[pbi->num_output_frames - 1];
+    YV12_BUFFER_CONFIG *sd = &buf->buf;
+    
+    // Calculate required size
+    uint32_t y_size = sd->y_width * sd->y_height;
+    uint32_t uv_size = sd->uv_width * sd->uv_height;
+    uint32_t required = y_size * 2 + uv_size * 2; // YUV420
+    
+    if (buffer_size < required)
+        return AV1_CONSOLE_DEC_ERR_BUF_TOO_SMALL;
+    
+    // Copy Y plane
+    uint8_t *dst = (uint8_t *)user_buffer;
+    for (int row = 0; row < sd->y_height; row++) {
+        memcpy(dst, sd->y_buffer + row * sd->y_stride, sd->y_width);
+        dst += sd->y_width;
     }
-  }
+    
+    // Copy U plane
+    for (int row = 0; row < sd->uv_height; row++) {
+        memcpy(dst, sd->u_buffer + row * sd->uv_stride, sd->uv_width);
+        dst += sd->uv_width;
+    }
+    
+    // Copy V plane
+    for (int row = 0; row < sd->uv_height; row++) {
+        memcpy(dst, sd->v_buffer + row * sd->uv_stride, sd->uv_width);
+        dst += sd->uv_width;
+    }
+    
+    // Apply film grain if present and requested
+    if (pbi->console_apply_film_grain && buf->film_grain_params.apply_grain) {
+        // Apply film grain to user buffer
+        av1_apply_film_grain(user_buffer, &buf->film_grain_params, 
+                             sd->y_width, sd->y_height);
+    }
+    
+    *bytes_written = required;
+    
+    // Release output frame after copy
+    pbi->num_output_frames = 0;
+    
+    return AV1_CONSOLE_DEC_SUCCESS;
 }
 ```
 
 ### Gotchas
-
-1. **Output queue**: AOM can have multiple frames queued (for SVC or output_all_layers). The console API must handle this—use `av1_get_raw_frame(pbi, index, ...)` to iterate.
-
-2. **Buffer release**: After copying output, the frame is still in the DPB. You must call the release function to free the reference, or let it be released on the next decode call.
-
-3. **Film grain timing**: Film grain is applied at output time, not stored in DPB. The grain parameters come from `av1_get_raw_frame()` and must be applied to the output buffer.
-
-4. **Format conversion**: AOM internally uses YV12 (planar Y, V, U). Console API output may want NV12 (semi-planar) or other formats. The copy function handles conversion.
+- **Plane strides**: AOM uses strides (`y_stride`, `uv_stride`) which may exceed width. Copy must use stride, not width.
+- **Bit depth**: 10-bit and 12-bit use 16-bit pixels. Buffer size calculation must account for this.
+- **Film grain application**: Film grain parameters are in `buf->film_grain_params`. Apply after copying pixels.
+- **Output release**: After `ReceiveOutput`, the frame is consumed. Must release reference (`decrease_ref_count`).
 
 ---
 
 ## Area 10: Error Handling & Edge Cases
 
 ### VP9 Pattern (from reports)
-The VP9 port handled resolution changes (sequence header changes), flush drain, destroy cleanup, and error propagation from worker threads. AOM has built-in error handling via `setjmp/longjmp` and `aom_internal_error_info`.
+Key edge cases: resolution change (sequence header change), flush drain, destroy cleanup, error propagation from workers.
 
 ### AOM Equivalent
 **Files involved:**
+- `av1/decoder/decoder.c` — `av1_receive_compressed_data()` error handling
 - `aom/internal/aom_codec_internal.h` — `aom_internal_error_info` struct
-- `av1/decoder/decoder.h` — `error` field in `AV1Decoder`
-- `av1/decoder/decoder.c` — Error handling in `av1_receive_compressed_data()`
 - `av1/decoder/obu.c` — OBU parsing errors
 
-**Key structures:**
-- `aom_internal_error_info` — Error code and detail
-- `aom_codec_err_t` — Error codes (`AOM_CODEC_OK`, `AOM_CODEC_CORRUPT_FRAME`, etc.)
+**Key AOM error handling:**
+- `aom_set_error()` — Set error without longjmp
+- `aom_internal_error()` — Set error and longjmp to error handler
+- `pbi->error` — Error info in decoder (decoder.h line ~290)
 
 ### Modifications Required
 
-**File: av1/decoder/decoder.h**
-Add console API error tracking:
+**File**: `av1/decoder/decoder.c` — Add console API error handling
 
 ```c
-typedef struct AV1Decoder {
-  // ... existing fields ...
-  
-  // Console API: error tracking
-  int console_error;                 // Last error code
-  char console_error_detail[256];    // Error detail string
-  
-  // Sequence header change tracking
-  int seq_header_changed;            // Reset required due to config change
-  
-  // ... rest of existing fields ...
-} AV1Decoder;
-```
-
-**File: av1/decoder/decoder.c**
-Implement console API error handling:
-
-```c
-// Get last error
-int av1_console_get_error(Av1ConsoleDecoder *dec, 
-                          char *detail, 
-                          size_t detail_size) {
-  if (!dec) return AV1_DEC_ERR_INVALID_PARAM;
-  
-  int err = dec->console_error;
-  
-  if (detail && detail_size > 0) {
-    strncpy(detail, dec->console_error_detail, detail_size - 1);
-    detail[detail_size - 1] = '\0';
-  }
-  
-  return err;
-}
-
-// Handle sequence header change (resolution change)
-int av1_console_handle_seq_change(AV1Decoder *pbi) {
-  AV1_COMMON *cm = &pbi->common;
-  
-  // Check if sequence header changed
-  if (pbi->sequence_header_changed) {
-    // Reallocate buffers for new resolution
-    if (av1_alloc_context_buffers(cm, cm->width, cm->height,
-                                   cm->mi_params.min_partition_size) < 0) {
-      return AV1_DEC_ERR_MEM_ALLOC;
+// Console API: Get detailed error info
+Av1ConsoleDecReturn av1_console_get_error(
+    AV1Decoder *pbi,
+    char *error_msg,
+    uint32_t msg_size) {
+    
+    if (!pbi) return AV1_CONSOLE_DEC_ERR_INVALID_PARAM;
+    
+    if (pbi->error.error_code != AOM_CODEC_OK) {
+        if (error_msg && msg_size > 0) {
+            strncpy(error_msg, pbi->error.detail, msg_size - 1);
+            error_msg[msg_size - 1] = '\0';
+        }
+        return map_aom_error(pbi->error.error_code);
     }
     
-    // Reset frame count
-    pbi->frame_count = 0;
-    pbi->sequence_header_changed = 0;
+    return AV1_CONSOLE_DEC_SUCCESS;
+}
+
+// Console API: Handle resolution change
+// Called when sequence header changes mid-stream
+Av1ConsoleDecReturn av1_console_handle_resolution_change(AV1Decoder *pbi) {
+    AV1_COMMON *cm = &pbi->common;
     
-    // Clear output queue
-    pbi->num_output_frames = 0;
-  }
-  
-  return 0;
+    // Free old buffers
+    av1_free_state_buffers(cm);
+    av1_free_context_buffers(cm);
+    
+    // Reallocate with new dimensions
+    int ret = av1_alloc_state_buffers(cm, cm->width, cm->height);
+    if (ret != 0) {
+        return AV1_CONSOLE_DEC_ERR_MEM_ALLOC;
+    }
+    
+    ret = av1_alloc_context_buffers(cm, cm->width, cm->height, 
+                                     cm->mi_params.mi_alloc_bsize);
+    if (ret != 0) {
+        return AV1_CONSOLE_DEC_ERR_MEM_ALLOC;
+    }
+    
+    // Reset decoder state for new resolution
+    pbi->need_resync = 1;
+    pbi->seen_frame_header = 0;
+    
+    return AV1_CONSOLE_DEC_SUCCESS;
 }
 
-// Flush: drain all pending output
-int av1_console_flush(Av1ConsoleDecoder *dec) {
-  if (!dec) return AV1_DEC_ERR_INVALID_PARAM;
-  
-  dec->state = AV1_DEC_CONSOLE_STATE_FLUSHING;
-  
-  // Call decode with NULL data to signal end of stream
-  aom_codec_err_t err = aom_codec_decode(&dec->aom_ctx, NULL, 0, NULL);
-  
-  // Drain any remaining frames
-  aom_codec_iter_t iter = NULL;
-  const aom_image_t *img;
-  while ((img = aom_codec_get_frame(&dec->aom_ctx, &iter)) != NULL) {
-    // Process each frame
-  }
-  
-  return av1ConsoleDecMapError(err);
+// Console API: Safe destroy during decode
+Av1ConsoleDecReturn av1_console_destroy_safe(AV1Decoder *pbi) {
+    if (!pbi) return AV1_CONSOLE_DEC_ERR_INVALID_PARAM;
+    
+    // If workers are running, wait for them
+    const AVxWorkerInterface *winterface = aom_get_worker_interface();
+    winterface->sync(&pbi->lf_worker);
+    
+    for (int i = 0; i < pbi->num_workers; i++) {
+        winterface->sync(&pbi->tile_workers[i]);
+    }
+    
+    // Now safe to destroy
+    av1_decoder_remove(pbi);
+    
+    return AV1_CONSOLE_DEC_SUCCESS;
 }
+```
 
-// Reset: reinitialize decoder state
-int av1_console_reset(Av1ConsoleDecoder *dec) {
-  if (!dec) return AV1_DEC_ERR_INVALID_PARAM;
-  
-  // Destroy and recreate
-  aom_codec_destroy(&dec->aom_ctx);
-  
-  // Reinitialize
-  aom_codec_dec_cfg_t cfg = {
-    .threads = dec->num_threads,
-    .w = 0,
-    .h = 0,
-    .allow_lowbitdepth = 1
-  };
-  
-  extern aom_codec_iface_t *aom_codec_av1_dx(void);
-  aom_codec_err_t err = aom_codec_dec_init(&dec->aom_ctx, 
-                                            aom_codec_av1_dx(), 
-                                            &cfg, 0);
-  if (err != AOM_CODEC_OK) {
-    return AV1_DEC_ERR_MEM_ALLOC;
-  }
-  
-  dec->pbi = (AV1Decoder *)dec->aom_ctx.priv;
-  dec->state = AV1_DEC_CONSOLE_STATE_CREATED;
-  dec->frame_count = 0;
-  
-  return AV1_DEC_SUCCESS;
-}
+**File**: `av1/decoder/obu.c` — Error propagation from workers
 
-// Error mapping from AOM to console API
-static int av1ConsoleDecMapError(aom_codec_err_t aom_err) {
-  switch (aom_err) {
-    case AOM_CODEC_OK:
-      return AV1_DEC_SUCCESS;
-    case AOM_CODEC_ERROR:
-      return AV1_DEC_ERR_GENERIC;
-    case AOM_CODEC_MEM_ERROR:
-      return AV1_DEC_ERR_MEM_ALLOC;
-    case AOM_CODEC_UNSUP_BITSTREAM:
-      return AV1_DEC_ERR_UNSUP_BITSTREAM;
-    case AOM_CODEC_UNSUP_FEATURE:
-      return AV1_DEC_ERR_UNSUP_FEATURE;
-    case AOM_CODEC_CORRUPT_FRAME:
-      return AV1_DEC_ERR_CORRUPT_FRAME;
-    case AOM_CODEC_INVALID_PARAM:
-      return AV1_DEC_ERR_INVALID_PARAM;
-    default:
-      return AV1_DEC_ERR_GENERIC;
-  }
-}
+```c
+// In aom_decode_frame_from_obus(), errors from tile decode
+// are propagated through pbi->error. For console API,
+// we need to capture and return these:
+//
+// In av1_decode_tg_tiles_and_wrapup() error path:
+//   pbi->error.error_code = AOM_CODEC_CORRUPT_FRAME;
+//   pbi->error.has_detail = 1;
+//   strcpy(pbi->error.detail, "Tile decode error");
+//
+// Console API caller should check:
+//   Av1ConsoleDecReturn err = av1_console_get_error(pbi, ...);
+//   if (err != AV1_CONSOLE_DEC_SUCCESS) { /* handle */ }
 ```
 
 ### Gotchas
-
-1. **setjmp/longjmp**: AOM uses `setjmp/longjmp` for error handling. If you integrate with your own threading, be careful—longjmp can bypass normal stack unwinding.
-
-2. **Error propagation from workers**: If a worker thread encounters an error, it sets the error in `pbi->error`. The main thread must check this after syncing workers.
-
-3. **Resolution change mid-stream**: When sequence header changes, AOM reinitializes. The console API must detect this and may need to flush pending frames before continuing.
-
-4. **Flush behavior**: Calling `aom_codec_decode()` with NULL data signals end of stream. This flushes any pending frames but doesn't reset the decoder.
-
-5. **Memory leaks on error**: If an error occurs during decode, ensure all allocated resources are freed. AOM's `av1_decoder_remove()` handles this, but if you're managing your own state, you need cleanup code.
+- **Resolution change**: AV1 allows resolution change mid-stream via new sequence header. Console API must handle reallocation.
+- **need_resync**: After error, decoder waits for keyframe/intra-only. `pbi->need_resync` tracks this.
+- **Worker errors**: If worker thread hits error, it sets `pbi->error` and calls longjmp. Console API must check error after sync.
+- **Flush behavior**: `Flush` should call `get_frame()` until NULL, then reset state to CREATED.
+- **Memory leaks**: Destroy must wait for workers and free all allocations (see `av1_decoder_remove()` in decoder.c).
 
 ---
 
-## Summary
+## Summary: Build Integration
 
-This guide provides the concrete modifications needed to add a console-style API to the AOM AV1 reference decoder. The key patterns from the VP9 port that apply to AV1 are:
+### CMakeLists.txt Integration
 
-1. **State machine**: Track decoder state (CREATED, DECODING, FLUSHING) in a wrapper struct
-2. **Split pipeline**: Header parsing stays synchronous; tile decode can be async
-3. **Iterator pattern**: Use `aom_codec_get_frame()` iterator, not a queue
-4. **External buffers**: Use AOM's frame buffer callback API for external memory management
-5. **Error mapping**: Convert AOM error codes to console API codes
-6. **Thread config**: Expose threading options (row_mt, tile parallelism) in config
+```cmake
+# Add to existing build
+add_library(av1_console_dec STATIC
+  av1/decoder/av1_console_dec.c
+)
 
-The modifications are spread across:
-- `av1/decoder/decoder.h` — New wrapper struct and tracking fields
-- `av1/decoder/decoder.c` — Console API functions
-- `av1/decoder/obu.c` — Exposed parsing functions for split pipeline
-- `aom/aom_decoder.h` — Extended config structures
-- `aom/aom_frame_buffer.h` — Memory query functions
+target_include_directories(av1_console_dec PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${AOM_INCLUDE_DIRS}
+)
+
+target_link_libraries(av1_console_dec PRIVATE
+  aom
+  pthread  # For thread primitives
+)
+
+if(BUILD_SHARED_LIBS)
+  target_compile_definitions(av1_console_dec PUBLIC AV1_CONSOLE_DEC_EXPORTS)
+endif()
+```
+
+### Test Vectors
+
+Use official AV1 test vectors from aomedia.org to verify:
+- Main profile (8-bit, 4:2:0)
+- High profile (10-bit, 4:2:0)
+- Professional profile (10/12-bit, 4:2:2)
+- Various resolutions (480p, 720p, 1080p, 4K, 8K)
+- Annex-B vs IVF containers
+- Multiple tile configurations

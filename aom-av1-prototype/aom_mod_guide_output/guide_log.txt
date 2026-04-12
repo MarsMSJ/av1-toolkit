@@ -32,3 +32,37 @@ Sending to model...
 [2026-04-12 15:23:44]   Areas completed: 1/10
 [2026-04-12 15:23:44] 
 Outputs: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/aom_mod_guide_output
+[2026-04-12 15:41:46] === AOM AV1 Modification Guide Generator ===
+[2026-04-12 15:41:46] Base URL: http://192.168.1.120:8000/v1
+[2026-04-12 15:41:46] Model: MiniMax-M2.5
+[2026-04-12 15:41:46] AOM dir: /home/mars/dev-tools/aom
+[2026-04-12 15:41:46] Report dir: /home/mars/dev-tools/av1-toolkit
+[2026-04-12 15:41:46] Output dir: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/aom_mod_guide_output
+[2026-04-12 15:41:46] 
+[2026-04-12 15:41:46] Loading VP9 analysis reports...
+[2026-04-12 15:41:46]   16_plan_internals.md: 3,518 chars
+[2026-04-12 15:41:46]   17_compile_final_plan.md: 15,249 chars
+[2026-04-12 15:41:46]   18_final_review.md: 3,543 chars
+[2026-04-12 15:41:46] 
+Loading AOM source files...
+[2026-04-12 15:41:46]   aom/aom_decoder.h: 10,670 chars
+[2026-04-12 15:41:46]   aom/aom_codec.h: 21,326 chars
+[2026-04-12 15:41:46]   aom/internal/aom_codec_internal.h: 16,741 chars
+[2026-04-12 15:41:46]   av1/decoder/decoder.h: 18,031 chars
+[2026-04-12 15:41:46]   av1/decoder/decoder.c: 17,589 chars
+[2026-04-12 15:41:46]   av1/decoder/obu.h: 1,269 chars
+[2026-04-12 15:41:46]   aom_mem/aom_mem.h: 2,811 chars
+[2026-04-12 15:41:46]   aom_mem/aom_mem.c: 2,771 chars
+[2026-04-12 15:41:46]   aom_util/aom_thread.h: 4,015 chars
+[2026-04-12 15:41:46]   av1/common/alloccommon.h: 2,476 chars
+[2026-04-12 15:41:46] 
+Building prompt...
+[2026-04-12 15:41:46] Total input: ~123,370 chars (~41,123 tokens)
+[2026-04-12 15:41:46] 
+Sending to model...
+[2026-04-12 16:24:06] Response in 2540.6s — stop — tokens: 46199
+[2026-04-12 16:24:06] 
+✓ Guide saved: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/aom_mod_guide_output/aom_modification_guide.md
+[2026-04-12 16:24:06]   Areas completed: 10/10
+[2026-04-12 16:24:06] 
+Outputs: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/aom_mod_guide_output
