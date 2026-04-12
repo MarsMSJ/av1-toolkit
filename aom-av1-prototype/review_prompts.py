@@ -33,6 +33,9 @@ MAX_TOKENS    = 16384
 TEMPERATURE   = 0.15   # lower than generation — we want precise analysis
 REQUEST_TIMEOUT = 1800
 
+# av1_decoder_api is the largest review — needs extra time
+DECODER_API_TIMEOUT = 3600  # 1 hour
+
 AOM_BASE_DIR_CANDIDATES = [
     Path.home() / "dev-tools" / "av1-toolkit" / "aom",
     SCRIPT_DIR.parent / "aom",
@@ -142,13 +145,11 @@ REVIEW_TARGETS = [
         """),
     },
     {
-        "name": "av1_decoder_api",
+        "name": "av1_decoder_api_init",
         "files": ["av1_decoder_api.h", "av1_decoder_api.c"],
         "context_files": [
             "av1_mem_override.h",
             "av1_job_queue.h",
-            "av1_copy_thread.h",
-            "av1_gpu_thread.h",
         ],
         "aom_context": [
             "aom/aom_decoder.h",
@@ -156,28 +157,66 @@ REVIEW_TARGETS = [
             "av1/decoder/decoder.h",
             "aom_mem/aom_mem.h",
         ],
+        "timeout_override": DECODER_API_TIMEOUT,
         "focus": textwrap.dedent("""\
-            Pay special attention to:
-            - av1_create_decoder: AOM init requires aom_codec_dec_init_ver() with
-              the correct interface pointer (aom_codec_av1_dx()). Verify the exact
-              call sequence matches aom/aom_decoder.h.
-            - av1_decode: after aom_codec_decode(), frames are retrieved with
-              aom_codec_get_frame() using an iterator (aom_codec_iter_t init to NULL).
-              Verify the iterator is used correctly and the loop drains all frames.
-            - DPB slot management: Av1DPBSlot is a local struct but AOM manages its
-              own frame buffers via RefCntBuffer. Verify the implementation correctly
-              bridges AOM's YV12_BUFFER_CONFIG to Av1DPBSlot without double-managing
-              the pixel data.
-            - Pending output table: MAX_PENDING_OUTPUT=16 is a fixed array. Verify
-              overflow is handled — what happens when 17 frames are sync'd before
-              any are output?
-            - av1_sync timeout=0 semantics: the design says 0=infinite but the
-              queue uses 0=non-blocking. Verify this is consistent with the header docs.
-            - State machine: AV1_DECODER_STATE_READY vs AV1_DECODER_STATE_CREATED —
-              the design only has CREATED; READY is an extra state. Verify all state
-              checks are consistent.
-            - Thread cleanup in av1_destroy_decoder: verify all threads are joined
-              in the correct order (copy thread last since workers may post to it).
+            Focus ONLY on these areas (ignore the output pipeline for now):
+
+            1. av1_create_decoder: AOM init requires aom_codec_dec_init_ver() with
+               the correct interface pointer (aom_codec_av1_dx()). Verify the exact
+               call sequence against aom/aom_decoder.h. Check flags, API version macro.
+
+            2. av1_decode: after aom_codec_decode(), frames are retrieved with
+               aom_codec_get_frame() using an iterator (aom_codec_iter_t init to NULL).
+               Verify the iterator is reset to NULL for each new decode call and the
+               loop drains ALL frames before returning.
+
+            3. DPB slot management: Av1DPBSlot duplicates AOM's YV12_BUFFER_CONFIG.
+               Verify the bridge from aom_image_t (returned by aom_codec_get_frame)
+               to Av1DPBSlot is correct — check plane pointers, strides, bit depth.
+
+            4. State machine: AV1_DECODER_STATE_READY appears in the .c but not
+               the original design (which only has CREATED). Check all state
+               transitions in av1_create_decoder, av1_decode, and av1_flush for
+               consistency.
+
+            5. av1_destroy_decoder: verify thread join order. Workers must be joined
+               before the copy thread (workers may still post to it). The AOM codec
+               must be destroyed after threads are joined.
+        """),
+    },
+    {
+        "name": "av1_decoder_api_output",
+        "files": ["av1_decoder_api.h", "av1_decoder_api.c"],
+        "context_files": [
+            "av1_copy_thread.h",
+            "av1_gpu_thread.h",
+            "av1_job_queue.h",
+        ],
+        "aom_context": [],
+        "timeout_override": DECODER_API_TIMEOUT,
+        "focus": textwrap.dedent("""\
+            Focus ONLY on the output pipeline (av1_sync, av1_set_output,
+            av1_receive_output, av1_flush, av1_destroy_decoder):
+
+            1. Pending output table: MAX_PENDING_OUTPUT=16 is a fixed array.
+               What happens when 17 frames are sync'd before any are output?
+               Verify overflow is detected and returns an error.
+
+            2. av1_sync timeout semantics: the header doc says timeout_us=0 means
+               infinite wait, but the queue implementation treats 0 as non-blocking.
+               Find and fix this inconsistency.
+
+            3. av1_set_output: verify the copy job is built correctly from the
+               DPB slot's aom_image_t data — plane pointers, strides, plane sizes
+               for both 8-bit and 16-bit (10/12-bit) frames.
+
+            4. av1_receive_output: verify the DPB ref_count is decremented AFTER
+               the copy completes, not before. Premature release allows the DPB
+               slot to be reused while copy is still running.
+
+            5. av1_flush: serial pipeline means no async work — but verify that
+               any frames currently in the pending_output table are handled
+               correctly (not leaked, not double-freed).
         """),
     },
     {
