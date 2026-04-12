@@ -31,10 +31,7 @@ OUTPUT_DIR    = SCRIPT_DIR / "review_outputs"
 MODEL_NAME    = "MiniMax-M2.5"
 MAX_TOKENS    = 16384
 TEMPERATURE   = 0.15   # lower than generation — we want precise analysis
-REQUEST_TIMEOUT = 1800
-
-# av1_decoder_api is the largest review — needs extra time
-DECODER_API_TIMEOUT = 3600  # 1 hour
+REQUEST_TIMEOUT = 3600  # default 1 hour for all reviews
 
 AOM_BASE_DIR_CANDIDATES = [
     Path.home() / "dev-tools" / "av1-toolkit" / "aom",
@@ -144,79 +141,115 @@ REVIEW_TARGETS = [
               sleeping — check the thread loop structure.
         """),
     },
+    # av1_decoder_api is split into 4 focused passes, each covering ~300 lines.
+    # line_ranges trims what gets sent so each pass stays under ~4K tokens.
     {
-        "name": "av1_decoder_api_init",
+        "name": "av1_decoder_api_helpers",
         "files": ["av1_decoder_api.h", "av1_decoder_api.c"],
-        "context_files": [
-            "av1_mem_override.h",
-            "av1_job_queue.h",
-        ],
-        "aom_context": [
-            "aom/aom_decoder.h",
-            "aom/aom_codec.h",
-            "av1/decoder/decoder.h",
-            "aom_mem/aom_mem.h",
-        ],
-        "timeout_override": DECODER_API_TIMEOUT,
+        "line_ranges": {"av1_decoder_api.c": (1, 376)},
+        "context_files": ["av1_mem_override.h", "av1_job_queue.h"],
+        "aom_context": [],
         "focus": textwrap.dedent("""\
-            Focus ONLY on these areas (ignore the output pipeline for now):
+            Focus on the static helper functions (lines 1–376 of av1_decoder_api.c):
 
-            1. av1_create_decoder: AOM init requires aom_codec_dec_init_ver() with
-               the correct interface pointer (aom_codec_av1_dx()). Verify the exact
-               call sequence against aom/aom_decoder.h. Check flags, API version macro.
+            1. calculate_frame_buffer_size: verify the plane size math is correct
+               for both 8-bit (1 byte/sample) and 10/12-bit (2 bytes/sample), and
+               that chroma plane sizes account for 4:2:0 subsampling (width/2, height/2).
 
-            2. av1_decode: after aom_codec_decode(), frames are retrieved with
-               aom_codec_get_frame() using an iterator (aom_codec_iter_t init to NULL).
-               Verify the iterator is reset to NULL for each new decode call and the
-               loop drains ALL frames before returning.
+            2. find_free_dpb_slot / allocate_dpb_slot / release_dpb_slot: check for
+               off-by-one in the DPB loop (REF_FRAMES=8). Verify release zeroes the
+               ref_count and does NOT free pixel memory (AOM owns that buffer).
 
-            3. DPB slot management: Av1DPBSlot duplicates AOM's YV12_BUFFER_CONFIG.
-               Verify the bridge from aom_image_t (returned by aom_codec_get_frame)
-               to Av1DPBSlot is correct — check plane pointers, strides, bit depth.
+            3. find_pending_output / add_pending_output / remove_pending_output:
+               MAX_PENDING_OUTPUT=16 is a fixed array. Verify add_pending_output
+               returns an error (not UB) when all 16 slots are full.
 
-            4. State machine: AV1_DECODER_STATE_READY appears in the .c but not
-               the original design (which only has CREATED). Check all state
-               transitions in av1_create_decoder, av1_decode, and av1_flush for
-               consistency.
-
-            5. av1_destroy_decoder: verify thread join order. Workers must be joined
-               before the copy thread (workers may still post to it). The AOM codec
-               must be destroyed after threads are joined.
+            4. worker_thread_func / gpu_thread_func: verify these thread loops check
+               a shutdown flag under the same mutex they use for the condvar wait,
+               avoiding the lost-wakeup race.
         """),
     },
     {
-        "name": "av1_decoder_api_output",
+        "name": "av1_decoder_api_create",
         "files": ["av1_decoder_api.h", "av1_decoder_api.c"],
+        "line_ranges": {"av1_decoder_api.c": (377, 687)},
+        "context_files": ["av1_mem_override.h", "av1_job_queue.h"],
+        "aom_context": [],  # AOM headers are ~17K tokens; focus text describes the API
+        "focus": textwrap.dedent("""\
+            Focus on av1_query_memory and av1_create_decoder (lines 377–687):
+
+            1. av1_create_decoder: AOM requires aom_codec_dec_init_ver() with
+               aom_codec_av1_dx() as the interface. Verify the flags argument and
+               the AOM_DECODER_ABI_VERSION macro are passed correctly per
+               aom/aom_decoder.h.
+
+            2. Thread creation order: copy thread must be started before worker
+               threads because workers post to the copy queue. Verify the order.
+
+            3. Error unwind: if thread N of M fails to create, the code must join
+               threads 0..N-1 before returning error. Check this path.
+
+            4. Memory layout: av1_query_memory returns alignment requirements.
+               Verify av1_create_decoder checks that config->memory_base is
+               aligned to at least that value before initialising the pool.
+        """),
+    },
+    {
+        "name": "av1_decoder_api_lifecycle",
+        "files": ["av1_decoder_api.h", "av1_decoder_api.c"],
+        "line_ranges": {"av1_decoder_api.c": (688, 1047)},
+        "context_files": ["av1_mem_override.h", "av1_job_queue.h"],
+        "aom_context": [],  # AOM headers are ~17K tokens; focus text describes the API
+        "focus": textwrap.dedent("""\
+            Focus on av1_flush, av1_destroy_decoder, and av1_decode (lines 688–1047):
+
+            1. av1_decode: after aom_codec_decode(), frames are drained with
+               aom_codec_get_frame() and an aom_codec_iter_t initialised to NULL.
+               Verify the iterator is reset to NULL at the start of each call and
+               the loop continues until aom_codec_get_frame returns NULL.
+
+            2. DPB bridge: aom_codec_get_frame returns aom_image_t*. Verify the
+               copy from aom_image_t into Av1DPBSlot is correct — plane[0/1/2]
+               pointers, stride[0/1/2], w/h, bit_depth, fmt.
+
+            3. av1_destroy_decoder thread join order: workers must be joined before
+               the copy thread (workers may post to copy queue during shutdown).
+               The AOM codec (aom_codec_destroy) must come after all threads are joined.
+
+            4. av1_flush state machine: verify the decoder state is set correctly
+               after flush — READY (or CREATED?) — and that it is consistent with
+               what av1_decode checks on entry.
+        """),
+    },
+    {
+        "name": "av1_decoder_api_output_pipeline",
+        "files": ["av1_decoder_api.h", "av1_decoder_api.c"],
+        "line_ranges": {"av1_decoder_api.c": (1048, 1292)},
         "context_files": [
             "av1_copy_thread.h",
             "av1_gpu_thread.h",
             "av1_job_queue.h",
         ],
         "aom_context": [],
-        "timeout_override": DECODER_API_TIMEOUT,
         "focus": textwrap.dedent("""\
-            Focus ONLY on the output pipeline (av1_sync, av1_set_output,
-            av1_receive_output, av1_flush, av1_destroy_decoder):
+            Focus on av1_sync, av1_set_output, av1_receive_output (lines 1048–1292):
 
-            1. Pending output table: MAX_PENDING_OUTPUT=16 is a fixed array.
-               What happens when 17 frames are sync'd before any are output?
-               Verify overflow is detected and returns an error.
+            1. av1_sync timeout=0: the header doc says 0 means infinite wait, but
+               the underlying queue treats 0 as non-blocking. Find the inconsistency
+               and fix it (map 0→UINT32_MAX before passing to the queue, or add a
+               special-case loop).
 
-            2. av1_sync timeout semantics: the header doc says timeout_us=0 means
-               infinite wait, but the queue implementation treats 0 as non-blocking.
-               Find and fix this inconsistency.
+            2. av1_set_output: verify the copy job is built correctly — plane
+               pointers and strides from the DPB slot, correct byte widths for
+               8-bit (stride bytes) vs 10/12-bit (stride * 2 bytes per row).
 
-            3. av1_set_output: verify the copy job is built correctly from the
-               DPB slot's aom_image_t data — plane pointers, strides, plane sizes
-               for both 8-bit and 16-bit (10/12-bit) frames.
+            3. av1_receive_output: verify the DPB slot ref_count is decremented
+               AFTER the copy job completes, not when it is queued. Premature
+               decrement allows the slot to be reclaimed while the copy is running.
 
-            4. av1_receive_output: verify the DPB ref_count is decremented AFTER
-               the copy completes, not before. Premature release allows the DPB
-               slot to be reused while copy is still running.
-
-            5. av1_flush: serial pipeline means no async work — but verify that
-               any frames currently in the pending_output table are handled
-               correctly (not leaked, not double-freed).
+            4. Pending output overflow: MAX_PENDING_OUTPUT=16. If add_pending_output
+               fails (table full), verify av1_sync returns AV1_ERROR_QUEUE_FULL and
+               does NOT leave a dangling DPB reference.
         """),
     },
     {
@@ -292,10 +325,18 @@ def find_aom_base():
     return None
 
 
-def load_file(path: Path) -> str:
-    if path.exists():
-        return path.read_text(encoding="utf-8", errors="replace")
-    return f"// FILE NOT FOUND: {path}\n"
+def load_file(path: Path, start_line: int = None, end_line: int = None) -> str:
+    """Load a file, optionally returning only lines [start_line, end_line] (1-indexed, inclusive)."""
+    if not path.exists():
+        return f"// FILE NOT FOUND: {path}\n"
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if start_line is None and end_line is None:
+        return text
+    lines = text.splitlines(keepends=True)
+    s = (start_line - 1) if start_line else 0
+    e = end_line if end_line else len(lines)
+    header = f"// [lines {start_line}–{end_line} of {len(lines)}]\n"
+    return header + "".join(lines[s:e])
 
 
 def send_request(base_url, model, system, messages, max_tokens, temperature, timeout):
@@ -408,12 +449,19 @@ def main():
             content = load_file(path)
             context_parts.append(f"### {dep_file} (dependency)\n```c\n{content}\n```")
 
-        # Load the files to review
+        # Load the files to review (optionally sliced by line range)
+        line_ranges = target.get("line_ranges", {})  # {"filename": (start, end)}
         review_parts = []
         for fname in target["files"]:
             path = MERGE_DIR / fname
-            content = load_file(path)
-            review_parts.append(f"### {fname}\n```c\n{content}\n```")
+            lr = line_ranges.get(fname)
+            if lr:
+                content = load_file(path, start_line=lr[0], end_line=lr[1])
+                label = f"{fname} (lines {lr[0]}–{lr[1]})"
+            else:
+                content = load_file(path)
+                label = fname
+            review_parts.append(f"### {label}\n```c\n{content}\n```")
 
         messages = []
 
@@ -450,11 +498,12 @@ def main():
             log("")
             continue
 
+        effective_timeout = target.get("timeout_override", args.timeout)
         start = time.time()
         try:
             resp = send_request(
                 args.base_url, args.model, SYSTEM_PROMPT, messages,
-                args.max_tokens, args.temperature, args.timeout
+                args.max_tokens, args.temperature, effective_timeout
             )
             elapsed = time.time() - start
             choice = resp["choices"][0]
