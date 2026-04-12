@@ -18,34 +18,34 @@ struct Y4MWriter {
 };
 
 static const char* get_colorspace(int chroma_subsampling, int bit_depth) {
-    if (bit_depth == 10) {
+    if (bit_depth <= 8) {
+        switch (chroma_subsampling) {
+            case 0: return "420";
+            case 1: return "422";
+            case 2: return "444";
+            default: return "420";
+        }
+    } else if (bit_depth <= 10) {
         switch (chroma_subsampling) {
             case 0: return "420p10";
             case 1: return "422p10";
             case 2: return "444p10";
             default: return "420p10";
         }
-    } else if (bit_depth == 12) {
+    } else if (bit_depth <= 12) {
         switch (chroma_subsampling) {
             case 0: return "420p12";
             case 1: return "422p12";
             case 2: return "444p12";
             default: return "420p12";
         }
-    } else if (bit_depth > 8) {
-        /* Default to 10-bit for unknown > 8 bit depths for compatibility */
-        switch (chroma_subsampling) {
-            case 0: return "420p10";
-            case 1: return "422p10";
-            case 2: return "444p10";
-            default: return "420p10";
-        }
     } else {
+        /* bit_depth > 12: assume 16-bit */
         switch (chroma_subsampling) {
-            case 0: return "420";
-            case 1: return "422";
-            case 2: return "444";
-            default: return "420";
+            case 0: return "420p16";
+            case 1: return "422p16";
+            case 2: return "444p16";
+            default: return "420p16";
         }
     }
 }
@@ -80,7 +80,7 @@ Y4MWriter *y4m_writer_open(const char *filename, int width, int height,
     writer->valid = true;
     
     const char *colorspace = get_colorspace(chroma_subsampling, writer->bit_depth);
-    fprintf(writer->file, "YUV4MPEG2 W%d H%d F%d:%d C%s\n",
+    fprintf(writer->file, "YUV4MPEG2 W%d H%d F%d:%d Ip C%s\n",
             width, height, writer->fps_n, writer->fps_d, colorspace);
     
     return writer;
@@ -113,19 +113,16 @@ int y4m_writer_write_frame(Y4MWriter *writer, const uint8_t *y, const uint8_t *u
     int uv_height = writer->height;
     
     switch (writer->chroma_subsampling) {
-        case 0:  /* 4:2:0 */
+        case 0:
             uv_width = writer->width / 2;
             uv_height = writer->height / 2;
             break;
-        case 1:  /* 4:2:2 */
+        case 1:
             uv_width = writer->width / 2;
-            uv_height = writer->height;  /* Fixed: 4:2:2 has full height */
             break;
-        case 2:  /* 4:4:4 */
-            uv_width = writer->width;
-            uv_height = writer->height;
+        case 2:
             break;
-        default:  /* Default to 4:2:0 */
+        default:
             uv_width = writer->width / 2;
             uv_height = writer->height / 2;
             break;
@@ -160,7 +157,7 @@ int y4m_writer_write_frame(Y4MWriter *writer, const uint8_t *y, const uint8_t *u
 }
 
 int y4m_writer_write_buffer(Y4MWriter *writer, const Av1OutputBuffer *buffer) {
-    if (!writer || !buffer || !buffer->planes[0] || !buffer->planes[1] || !buffer->planes[2]) {
+    if (!writer || !buffer || !buffer->planes[0]) {
         return -1;
     }
     

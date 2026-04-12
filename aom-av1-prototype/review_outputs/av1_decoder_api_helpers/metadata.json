@@ -1,0 +1,24 @@
+{
+  "target": "av1_decoder_api_helpers",
+  "timestamp": "2026-04-12T00:55:29.580772",
+  "elapsed_seconds": 851.6173830032349,
+  "finish_reason": "stop",
+  "continuations": 0,
+  "usage": {
+    "prompt_tokens": 7163,
+    "total_tokens": 11962,
+    "completion_tokens": 4799,
+    "prompt_tokens_details": null
+  },
+  "corrected_files": [
+    "unnamed_1.c"
+  ],
+  "completed_areas": [
+    "Focus area 1: calculate_frame_buffer_size \u2014 checked, 1 bug found",
+    "Focus area 2: find_free_dpb_slot / allocate_dpb_slot / release_dpb_slot \u2014 checked, 1 bug found",
+    "Focus area 3: find_pending_output / add_pending_output / remove_pending_output \u2014 checked, no bugs",
+    "Focus area 4: worker_thread_func / gpu_thread_func \u2014 checked, no bugs (stubs only)"
+  ],
+  "pending_areas": [],
+  "response_hash": "8203f763a60c6af0"
+}

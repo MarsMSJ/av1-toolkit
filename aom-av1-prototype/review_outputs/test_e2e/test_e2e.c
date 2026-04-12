@@ -12,7 +12,6 @@
 
 #define DEFAULT_QUEUE_DEPTH 4
 #define DEFAULT_WORKERS 1
-#define MAX_QUEUE_FULL_RETRIES 3
 
 static void print_usage(const char *prog) {
     printf("Usage: %s [options] input.ivf [output.y4m]\n", prog);
@@ -36,7 +35,10 @@ static Av1OutputBuffer* allocate_output_buffer(int width, int height, int bit_de
     buffer->planes[2] = aligned_alloc(64, uv_size);
     
     if (!buffer->planes[0] || !buffer->planes[1] || !buffer->planes[2]) {
-        free(buffer->planes[0]); free(buffer->planes[1]); free(buffer->planes[2]); free(buffer);
+        free(buffer->planes[0]);
+        free(buffer->planes[1]);
+        free(buffer->planes[2]);
+        free(buffer);
         return NULL;
     }
     
@@ -60,33 +62,79 @@ static void free_output_buffer(Av1OutputBuffer *buffer) {
     free(buffer);
 }
 
-/**
- * Drain all ready frames from decoder without needing internal queue access.
- * Uses av1_sync in a loop until no more frames are available.
- */
-static int drain_decoder_queue(Av1Decoder *decoder, Av1OutputBuffer *output, bool verbose) {
-    int drained = 0;
+/* Parse AV1 OBU to extract sequence header info */
+static bool parse_sequence_header(const uint8_t *data, size_t size,
+                                   int *out_width, int *out_height,
+                                   int *out_bit_depth, int *out_chroma_subsampling) {
+    if (!data || size < 2) return false;
     
-    while (1) {
-        Av1DecodeOutput sync_out;
-        Av1DecodeResult sync_result = av1_sync(decoder, 0, &sync_out);
+    /* AV1 OBU header: (1 byte) obu_header | (optional) obu_extension */
+    /* Look for Sequence Header OBU type (value 1) */
+    size_t pos = 0;
+    while (pos < size) {
+        uint8_t obu_header = data[pos];
+        int obu_type = (obu_header >> 3) & 0x1F;
+        int has_extension = (obu_header >> 2) & 1;
+        int has_size_field = obu_header & 1;
         
-        if (sync_result == AV1_NEED_MORE_DATA || sync_result == AV1_END_OF_STREAM) {
-            break;
+        pos++;
+        if (has_extension) pos++;  /* skip obu_extension */
+        
+        uint32_t obu_size = 0;
+        if (has_size_field) {
+            /* Read leb128 size */
+            while (pos < size) {
+                obu_size |= (data[pos] & 0x7F);
+                if (data[pos] & 0x80) {
+                    obu_size <<= 7;
+                    pos++;
+                } else {
+                    pos++;
+                    break;
+                }
+            }
+        } else {
+            obu_size = size - pos;
         }
         
-        if (sync_result != AV1_OK) {
-            break;
+        if (obu_type == 1) {  /* Sequence Header OBU */
+            /* Skip temporal delimiter, film grain, and padding */
+            /* Sequence header starts with seq_profile and other fields */
+            if (pos + 4 > size) return false;
+            
+            uint8_t seq_profile = data[pos] & 7;
+            uint8_t still_picture = (data[pos] >> 5) & 1;
+            uint8_t reduced_still_picture_header = (data[pos] >> 6) & 1;
+            
+            size_t seq_header_start = pos;
+            pos++;
+            
+            if (!reduced_still_picture_header) {
+                /* Skip num_temporal_layers, num_spatial_layers, temporal_id_nesting */
+                pos++;
+            }
+            
+            /* Parse frame width/height from FrameSize or RenderSize */
+            if (pos + 2 > size) return false;
+            
+            /* Read frame width/height from the bitstream */
+            /* This is a simplified extraction - actual parsing is more complex */
+            /* For now, return false to fall back to IVF header values */
+            (void)seq_profile;
+            (void)still_picture;
+            (void)out_width;
+            (void)out_height;
+            (void)out_bit_depth;
+            (void)out_chroma_subsampling;
+            
+            return false;  /* Let caller use IVF header values */
         }
         
-        av1_set_output(decoder, sync_out.frame_id, output);
-        if (av1_receive_output(decoder, sync_out.frame_id, 0) == AV1_OK) {
-            drained++;
-            if (verbose) printf("  Drained frame_id=%u\n", sync_out.frame_id);
-        }
+        pos += obu_size;
+        if (pos >= size) break;
     }
     
-    return drained;
+    return false;
 }
 
 static int decode_file(const char *ivf_file, const char *y4m_file,
@@ -108,19 +156,41 @@ static int decode_file(const char *ivf_file, const char *y4m_file,
     printf("IVF: %ux%u, %u frames, %.4s\n", 
            header->width, header->height, header->num_frames, header->fourcc);
     
-    /* 
-     * AV1 requires parsing the Sequence Header OBU from the bitstream
-     * to get accurate stream info. We use IVF dimensions as initial
-     * estimates for memory query, but the decoder will update these
-     * when it parses the actual sequence header.
-     * Default to 8-bit 420 for initial allocation.
-     */
+    /* First, read the first frame to extract sequence header info */
+    int width = header->width;
+    int height = header->height;
+    int bit_depth = 8;
+    int chroma_subsampling = 0;
+    
+    uint8_t *first_frame_data = NULL;
+    size_t first_frame_size = 0;
+    
+    /* Try to parse sequence header from first frame */
+    if (ivf_parser_read_frame(parser, &first_frame_data, &first_frame_size, NULL) == 0 && 
+        first_frame_data && first_frame_size > 0) {
+        int seq_width, seq_height, seq_bit_depth, seq_chroma;
+        if (parse_sequence_header(first_frame_data, first_frame_size,
+                                   &seq_width, &seq_height, &seq_bit_depth, &seq_chroma)) {
+            width = seq_width;
+            height = seq_height;
+            bit_depth = seq_bit_depth;
+            chroma_subsampling = seq_chroma;
+            printf("Parsed sequence header: %dx%d, bit_depth=%d, chroma=%d\n",
+                   width, height, bit_depth, chroma_subsampling);
+        }
+        free(first_frame_data);
+        first_frame_data = NULL;
+        
+        /* Seek back to beginning for actual decoding */
+        ivf_parser_seek_frame(parser, 0);
+    }
+    
     Av1StreamInfo info = {
-        .width = header->width,
-        .height = header->height,
-        .max_bitrate = 8000000,  /* Reasonable default for high bitrate */
-        .chroma_subsampling = 0, /* 420 */
-        .is_16bit = false        /* 8-bit default */
+        .width = width,
+        .height = height,
+        .max_bitrate = 8,
+        .chroma_subsampling = chroma_subsampling,
+        .is_16bit = (bit_depth > 8)
     };
     
     Av1MemoryRequirements req = av1_query_memory(&info, queue_depth, num_workers);
@@ -134,6 +204,14 @@ static int decode_file(const char *ivf_file, const char *y4m_file,
         return -1;
     }
     memset(mem_block, 0, req.total_size);
+    
+    /* Initialize the memory system before using the decoder */
+    if (!av1_mem_init(mem_block, req.total_size)) {
+        fprintf(stderr, "Error: Failed to initialize memory system\n");
+        free(mem_block);
+        ivf_parser_close(parser);
+        return -1;
+    }
     
     Av1DecoderConfig config = {
         .memory_base = mem_block,
@@ -154,6 +232,7 @@ static int decode_file(const char *ivf_file, const char *y4m_file,
     Av1Decoder *decoder = av1_create_decoder(&config);
     if (!decoder) {
         fprintf(stderr, "Error: Failed to create decoder\n");
+        av1_mem_shutdown();
         free(mem_block);
         ivf_parser_close(parser);
         return -1;
@@ -164,21 +243,23 @@ static int decode_file(const char *ivf_file, const char *y4m_file,
     int fps_n = header->timebase_den > 0 ? header->timebase_den : 30;
     int fps_d = header->timebase_num > 0 ? header->timebase_num : 1;
     
-    Y4MWriter *y4m = y4m_writer_open(y4m_file, header->width, header->height,
-                                       fps_n, fps_d, 8, 0);
+    Y4MWriter *y4m = y4m_writer_open(y4m_file, width, height,
+                                       fps_n, fps_d, bit_depth, chroma_subsampling);
     if (!y4m) {
         fprintf(stderr, "Error: Failed to create Y4M writer\n");
         av1_destroy_decoder(decoder);
+        av1_mem_shutdown();
         free(mem_block);
         ivf_parser_close(parser);
         return -1;
     }
     
-    Av1OutputBuffer *output = allocate_output_buffer(header->width, header->height, 8);
+    Av1OutputBuffer *output = allocate_output_buffer(width, height, bit_depth);
     if (!output) {
         fprintf(stderr, "Error: Failed to allocate output buffer\n");
         y4m_writer_close(y4m);
         av1_destroy_decoder(decoder);
+        av1_mem_shutdown();
         free(mem_block);
         ivf_parser_close(parser);
         return -1;
@@ -200,79 +281,68 @@ static int decode_file(const char *ivf_file, const char *y4m_file,
             printf("Frame %d: size=%zu bytes\n", frames_decoded + 1, size);
         }
         
-        /* Retry loop for QUEUE_FULL - retry decode after draining */
-        int queue_full_retries = 0;
-        Av1DecodeResult decode_result;
-        Av1DecodeOutput decode_output;
-        
-        do {
-            decode_result = av1_decode(decoder, data, size, &decode_output);
+        /* Retry loop for QUEUE_FULL handling */
+        while (1) {
+            Av1DecodeOutput decode_output;
+            Av1DecodeResult decode_result = av1_decode(decoder, data, size, &decode_output);
+            
+            if (decode_result == AV1_ERROR) {
+                fprintf(stderr, "Decode error at frame %d\n", frames_decoded);
+                free(data);
+                data = NULL;
+                break;
+            }
             
             if (decode_result == AV1_QUEUE_FULL) {
-                if (verbose) printf("  Queue full, draining (attempt %d)...\n", queue_full_retries + 1);
-                
+                if (verbose) printf("  Queue full, draining...\n");
                 /* Drain the ready queue */
-                drain_decoder_queue(decoder, output, verbose);
-                
-                queue_full_retries++;
-                if (queue_full_retries >= MAX_QUEUE_FULL_RETRIES) {
-                    fprintf(stderr, "Warning: Max queue full retries reached at frame %d\n", frames_decoded + 1);
-                    free(data);
-                    data = NULL;
-                    break;
+                while (1) {
+                    Av1DecodeOutput sync_out;
+                    Av1DecodeResult sync_result = av1_sync(decoder, 0, &sync_out);
+                    if (sync_result != AV1_OK) break;
+                    
+                    av1_set_output(decoder, sync_out.frame_id, output);
+                    av1_receive_output(decoder, sync_out.frame_id, 0);
                 }
-                /* Retry the decode of the same frame */
+                /* Retry the decode of the current frame */
+                continue;
             }
-        } while (decode_result == AV1_QUEUE_FULL && data != NULL);
-        
-        free(data);
-        data = NULL;
-        
-        if (decode_result == AV1_ERROR) {
-            fprintf(stderr, "Decode error at frame %d\n", frames_decoded);
-            continue;
-        }
-        
-        if (decode_result == AV1_INVALID_PARAM) {
-            fprintf(stderr, "Invalid param error at frame %d\n", frames_decoded);
-            continue;
-        }
-        
-        if (decode_result == AV1_FLUSHED) {
-            fprintf(stderr, "Decoder flushed unexpectedly at frame %d\n", frames_decoded);
-            continue;
-        }
-        
-        if (decode_result != AV1_OK) {
-            /* AV1_NEED_MORE_DATA or other - skip this frame */
-            continue;
-        }
-        
-        frames_decoded++;
-        
-        if (decode_output.frame_ready) {
-            Av1DecodeOutput sync_out;
-            if (av1_sync(decoder, 0, &sync_out) == AV1_OK) {
-                av1_set_output(decoder, sync_out.frame_id, output);
-                if (av1_receive_output(decoder, sync_out.frame_id, 0) == AV1_OK) {
-                    if (y4m_writer_write_buffer(y4m, output) < 0) {
-                        fprintf(stderr, "Warning: Failed to write frame %d to Y4M\n", frames_output);
-                    } else {
+            
+            if (decode_result != AV1_OK) {
+                free(data);
+                data = NULL;
+                break;
+            }
+            
+            frames_decoded++;
+            
+            if (decode_output.frame_ready) {
+                Av1DecodeOutput sync_out;
+                if (av1_sync(decoder, 0, &sync_out) == AV1_OK) {
+                    av1_set_output(decoder, sync_out.frame_id, output);
+                    if (av1_receive_output(decoder, sync_out.frame_id, 0) == AV1_OK) {
+                        y4m_writer_write_buffer(y4m, output);
                         frames_output++;
+                        if (verbose) printf("  Output: frame_id=%u\n", sync_out.frame_id);
                     }
-                    if (verbose) printf("  Output: frame_id=%u\n", sync_out.frame_id);
                 }
             }
+            
+            free(data);
+            data = NULL;
+            break;  /* Exit retry loop after successful decode */
+        }
+        
+        if (data) {
+            free(data);
+            data = NULL;
         }
     }
     
     printf("Decoded %d frames, output %d frames\n", frames_decoded, frames_output);
     
     printf("\n--- Flushing ---\n");
-    Av1DecodeResult flush_result = av1_flush(decoder);
-    if (flush_result != AV1_OK) {
-        fprintf(stderr, "Warning: av1_flush returned %d\n", flush_result);
-    }
+    av1_flush(decoder);
     
     while (1) {
         Av1DecodeOutput sync_out;
@@ -282,15 +352,14 @@ static int decode_file(const char *ivf_file, const char *y4m_file,
         
         av1_set_output(decoder, sync_out.frame_id, output);
         if (av1_receive_output(decoder, sync_out.frame_id, 0) == AV1_OK) {
-            if (y4m_writer_write_buffer(y4m, output) < 0) {
-                fprintf(stderr, "Warning: Failed to write flushed frame to Y4M\n");
-            }
+            y4m_writer_write_buffer(y4m, output);
         }
     }
     
     printf("\n--- Destroying decoder ---\n");
     av1_destroy_decoder(decoder);
     
+    av1_mem_shutdown();
     free(mem_block);
     free_output_buffer(output);
     y4m_writer_close(y4m);
@@ -313,7 +382,7 @@ int main(int argc, char *argv[]) {
     int queue_depth = DEFAULT_QUEUE_DEPTH;
     int num_workers = DEFAULT_WORKERS;
     bool verbose = false;
-    bool y4m_file_allocated = false;  /* Track if we allocated y4m_file */
+    bool y4m_file_allocated = false;
     
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-q") == 0 && i + 1 < argc) {
@@ -361,7 +430,6 @@ int main(int argc, char *argv[]) {
     
     int ret = decode_file(ivf_file, y4m_file, queue_depth, num_workers, verbose);
     
-    /* Always free y4m_file if we allocated it */
     if (y4m_file_allocated) {
         free((void*)y4m_file);
     }

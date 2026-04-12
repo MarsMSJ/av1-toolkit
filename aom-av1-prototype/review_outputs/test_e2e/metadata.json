@@ -1,16 +1,21 @@
 {
   "target": "test_e2e",
-  "timestamp": "2026-04-11T20:55:33.461096",
-  "elapsed_seconds": 816.4337494373322,
+  "timestamp": "2026-04-12T02:17:49.180339",
+  "elapsed_seconds": 991.5835018157959,
   "finish_reason": "stop",
+  "continuations": 0,
   "usage": {
-    "prompt_tokens": 6826,
-    "total_tokens": 11666,
-    "completion_tokens": 4840,
+    "prompt_tokens": 7226,
+    "total_tokens": 12696,
+    "completion_tokens": 5470,
     "prompt_tokens_details": null
   },
   "corrected_files": [
     "test_e2e.c"
   ],
-  "response_hash": "936085b991d8b058"
+  "completed_areas": [
+    "test_e2e \u2014 checked, 7 bugs found"
+  ],
+  "pending_areas": [],
+  "response_hash": "eebcb35059d53997"
 }

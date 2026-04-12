@@ -28,9 +28,6 @@ struct Av1CopyThread {
     pthread_t          thread;
     int                running;    /* 1 while thread should run */
     int                shutdown;   /* 1 when shutdown requested */
-    
-    /* Track in-flight job for destroy synchronization */
-    Av1CopyJob        *current_job;
 };
 
 /* Forward declarations */
@@ -59,7 +56,6 @@ Av1CopyThread* av1_copy_thread_create(int queue_depth) {
     ct->count = 0;
     ct->running = 1;
     ct->shutdown = 0;
-    ct->current_job = NULL;
     
     /* Initialize synchronization primitives */
     if (pthread_mutex_init(&ct->mutex, NULL) != 0) {
@@ -133,18 +129,18 @@ int av1_copy_thread_wait(Av1CopyThread *ct, Av1CopyJob *job, uint32_t timeout_us
     
     pthread_mutex_lock(&ct->mutex);
     
-    /* Check current status - now under lock protection */
+    /* Check current status without waiting */
     int current_status = atomic_load(&job->status);
     if (current_status == AV1_COPY_COMPLETE) {
         pthread_mutex_unlock(&ct->mutex);
         return 0;
     }
     
-    if (current_status == AV1_COPY_IN_PROGRESS) {
-        /* Job is being processed, wait for completion */
+    /* Wait for job to transition from PENDING or IN_PROGRESS to COMPLETE */
+    if (current_status == AV1_COPY_PENDING || current_status == AV1_COPY_IN_PROGRESS) {
         if (timeout_us == 0) {
-            /* Infinite wait - use loop to handle spurious wakeups */
-            while (atomic_load(&job->status) == AV1_COPY_IN_PROGRESS) {
+            /* Infinite wait */
+            while (atomic_load(&job->status) != AV1_COPY_COMPLETE) {
                 pthread_cond_wait(&ct->job_complete, &ct->mutex);
             }
         } else {
@@ -159,7 +155,7 @@ int av1_copy_thread_wait(Av1CopyThread *ct, Av1CopyJob *job, uint32_t timeout_us
             ts.tv_sec += (int)(nsec / 1000000000ULL);
             ts.tv_nsec = (long)(nsec % 1000000000ULL);
             
-            while (atomic_load(&job->status) == AV1_COPY_IN_PROGRESS) {
+            while (atomic_load(&job->status) != AV1_COPY_COMPLETE) {
                 int ret = pthread_cond_timedwait(&ct->job_complete, &ct->mutex, &ts);
                 if (ret == ETIMEDOUT) {
                     pthread_mutex_unlock(&ct->mutex);
@@ -196,12 +192,6 @@ int av1_copy_thread_destroy(Av1CopyThread *ct) {
     ct->running = 0;  /* Signal thread to exit */
     ct->shutdown = 1;
     pthread_cond_broadcast(&ct->job_available);  /* Wake thread to exit */
-    
-    /* Wait for any in-flight job to complete before shutting down */
-    while (ct->current_job != NULL) {
-        pthread_cond_wait(&ct->job_complete, &ct->mutex);
-    }
-    
     pthread_mutex_unlock(&ct->mutex);
     
     /* Wait for thread to terminate */
@@ -246,9 +236,6 @@ static void* copy_thread_main(void *arg) {
         /* Mark entry as empty */
         entry->enqueued = 0;
         
-        /* Track in-flight job for destroy synchronization */
-        ct->current_job = job;
-        
         /* Set status to IN_PROGRESS and release lock during copy */
         atomic_store(&job->status, AV1_COPY_IN_PROGRESS);
         
@@ -262,7 +249,6 @@ static void* copy_thread_main(void *arg) {
         
         /* Signal any waiters that the job is done */
         pthread_mutex_lock(&ct->mutex);
-        ct->current_job = NULL;  /* Clear in-flight job */
         pthread_cond_broadcast(&ct->job_complete);
     }
     

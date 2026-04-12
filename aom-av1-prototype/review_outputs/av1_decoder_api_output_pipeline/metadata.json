@@ -1,0 +1,24 @@
+{
+  "target": "av1_decoder_api_output_pipeline",
+  "timestamp": "2026-04-12T01:33:15.598124",
+  "elapsed_seconds": 692.228077173233,
+  "finish_reason": "stop",
+  "continuations": 0,
+  "usage": {
+    "prompt_tokens": 6958,
+    "total_tokens": 11035,
+    "completion_tokens": 4077,
+    "prompt_tokens_details": null
+  },
+  "corrected_files": [
+    "av1_decoder_api.c"
+  ],
+  "completed_areas": [
+    "Focus area 1: av1_sync timeout=0 inconsistency \u2014 checked",
+    "Focus area 2: av1_set_output copy job correctness \u2014 checked",
+    "Focus area 3: av1_receive_output ref_count handling \u2014 checked",
+    "Focus area 4: Pending output overflow handling \u2014 checked"
+  ],
+  "pending_areas": [],
+  "response_hash": "c81ace3ffdab2b79"
+}

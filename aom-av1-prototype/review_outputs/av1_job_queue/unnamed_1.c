@@ -1,25 +1,3 @@
-
-
-## Progress
-- [x] av1_job_queue — checked, 1 bug found
-
-## Focus area 1: av1_job_queue
-
-### Bug 1.1: Missing condvar broadcast in destroy function
-- **File**: av1_job_queue.c, line ~165 (av1_frame_queue_destroy)
-- **Problem**: The `av1_frame_queue_destroy` function destroys the mutex and condition variables without signaling waiting threads. If a thread is blocked in `pthread_cond_wait` or `pthread_cond_timedwait`, it will never wake up, causing deadlock or undefined behavior when the mutex is destroyed while a thread holds it.
-- **Fix**: Add `pthread_cond_broadcast` to wake all waiting threads before destroying the synchronization primitives. Also need to re-acquire and release the mutex to allow waiting threads to proceed (they will wake, see the queue is destroyed, and return).
-
-### Bug 1.2: Potential integer overflow in timeout calculation
-- **File**: av1_job_queue.c, line ~87 (av1_frame_queue_pop)
-- **Problem**: The calculation `uint64_t nsec = (uint64_t)ts.tv_nsec + (uint64_t)timeout_us * NSEC_PER_USEC` could overflow if `timeout_us` is very large (close to UINT32_MAX). While unlikely in practice, it's a potential issue.
-- **Fix**: Use proper 128-bit arithmetic or check for overflow. For practical purposes, this is a minor issue but worth noting.
-
----
-
-### av1_job_queue.c (corrected)
-
-```c
 #include "av1_job_queue.h"
 #include <stdlib.h>
 #include <string.h>
@@ -178,4 +156,3 @@ void av1_frame_queue_destroy(Av1FrameQueue *q) {
 
     memset(q, 0, sizeof(*q));
 }
-```

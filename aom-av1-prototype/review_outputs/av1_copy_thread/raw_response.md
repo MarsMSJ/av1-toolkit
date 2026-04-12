@@ -1,28 +1,24 @@
 
 
-## Code Review: av1_copy_thread.c
+## Progress
+- [x] av1_copy_thread — checked, 2 bugs found
 
-I've identified several bugs in the code. Let me detail each one:
+## Focus area: av1_copy_thread
 
-### Bug 1: Infinite wait loop is broken (lines 130-135)
-**Problem:** The infinite wait case has a syntax error - missing closing brace for the while condition, and the `pthread_cond_wait` is outside the while loop. This means:
-1. If job is `AV1_COPY_IN_PROGRESS` with timeout=0, it waits only ONCE (not in a loop)
-2. After waiting, it doesn't re-check the status - it falls through incorrectly
-3. There's no final status verification
+### Bug 1.1: Syntax error in wait function
+- **File**: av1_copy_thread.c, line ~107
+- **Problem**: The while loop for infinite wait has a syntax error - missing closing parenthesis and missing braces. The code reads:
+  ```c
+  while (atomic_load(&job->status) == AV1_COPY_IN_PROGRESS
+  pthread_cond_wait(&ct->job_complete, &ct->mutex);
+  ```
+  This is missing `)` and `{`/`}` around the wait call, causing a compile error.
+- **Fix**: Add the missing closing parenthesis and braces.
 
-### Bug 2: Race condition - status check before mutex lock (lines 119-122)
-**Problem:** The initial status check happens BEFORE acquiring the mutex:
-```c
-int current_status = atomic_load(&job->status);  // No lock!
-pthread_mutex_lock(&ct->mutex);
-```
-This is a race condition - the status could change between the check and acquiring the lock.
-
-### Bug 3: Destroy doesn't wait for in-flight job (lines 170-180)
-**Problem:** `av1_copy_thread_destroy` signals shutdown and immediately joins the thread without ensuring the current job finishes. If a job is executing `copy_job_execute` when destroy is called, the thread could exit while still writing to the job's buffers (use-after-free).
-
-### Bug 4: No job lifetime protection
-**Problem:** The API takes ownership of `Av1CopyJob*` from caller but doesn't increment any reference count. If the caller frees the job while the copy thread is still processing it, this causes use-after-free.
+### Bug 1.2: Race condition - doesn't wait for pending jobs
+- **File**: av1_copy_thread.c, line ~100-110
+- **Problem**: In `av1_copy_thread_wait`, if the job status is `AV1_COPY_PENDING` (job is queued but not yet picked up by worker thread), the function returns -1 immediately without waiting. This is a logic error - callers expect to wait for job completion regardless of whether it's pending or in progress.
+- **Fix**: Add handling for the `AV1_COPY_PENDING` case - wait on the condition variable similar to `AV1_COPY_IN_PROGRESS`.
 
 ---
 
@@ -59,9 +55,6 @@ struct Av1CopyThread {
     pthread_t          thread;
     int                running;    /* 1 while thread should run */
     int                shutdown;   /* 1 when shutdown requested */
-    
-    /* Track in-flight job for destroy synchronization */
-    Av1CopyJob        *current_job;
 };
 
 /* Forward declarations */
@@ -90,7 +83,6 @@ Av1CopyThread* av1_copy_thread_create(int queue_depth) {
     ct->count = 0;
     ct->running = 1;
     ct->shutdown = 0;
-    ct->current_job = NULL;
     
     /* Initialize synchronization primitives */
     if (pthread_mutex_init(&ct->mutex, NULL) != 0) {
@@ -164,18 +156,18 @@ int av1_copy_thread_wait(Av1CopyThread *ct, Av1CopyJob *job, uint32_t timeout_us
     
     pthread_mutex_lock(&ct->mutex);
     
-    /* Check current status - now under lock protection */
+    /* Check current status without waiting */
     int current_status = atomic_load(&job->status);
     if (current_status == AV1_COPY_COMPLETE) {
         pthread_mutex_unlock(&ct->mutex);
         return 0;
     }
     
-    if (current_status == AV1_COPY_IN_PROGRESS) {
-        /* Job is being processed, wait for completion */
+    /* Wait for job to transition from PENDING or IN_PROGRESS to COMPLETE */
+    if (current_status == AV1_COPY_PENDING || current_status == AV1_COPY_IN_PROGRESS) {
         if (timeout_us == 0) {
-            /* Infinite wait - use loop to handle spurious wakeups */
-            while (atomic_load(&job->status) == AV1_COPY_IN_PROGRESS) {
+            /* Infinite wait */
+            while (atomic_load(&job->status) != AV1_COPY_COMPLETE) {
                 pthread_cond_wait(&ct->job_complete, &ct->mutex);
             }
         } else {
@@ -190,7 +182,7 @@ int av1_copy_thread_wait(Av1CopyThread *ct, Av1CopyJob *job, uint32_t timeout_us
             ts.tv_sec += (int)(nsec / 1000000000ULL);
             ts.tv_nsec = (long)(nsec % 1000000000ULL);
             
-            while (atomic_load(&job->status) == AV1_COPY_IN_PROGRESS) {
+            while (atomic_load(&job->status) != AV1_COPY_COMPLETE) {
                 int ret = pthread_cond_timedwait(&ct->job_complete, &ct->mutex, &ts);
                 if (ret == ETIMEDOUT) {
                     pthread_mutex_unlock(&ct->mutex);
@@ -227,12 +219,6 @@ int av1_copy_thread_destroy(Av1CopyThread *ct) {
     ct->running = 0;  /* Signal thread to exit */
     ct->shutdown = 1;
     pthread_cond_broadcast(&ct->job_available);  /* Wake thread to exit */
-    
-    /* Wait for any in-flight job to complete before shutting down */
-    while (ct->current_job != NULL) {
-        pthread_cond_wait(&ct->job_complete, &ct->mutex);
-    }
-    
     pthread_mutex_unlock(&ct->mutex);
     
     /* Wait for thread to terminate */
@@ -277,9 +263,6 @@ static void* copy_thread_main(void *arg) {
         /* Mark entry as empty */
         entry->enqueued = 0;
         
-        /* Track in-flight job for destroy synchronization */
-        ct->current_job = job;
-        
         /* Set status to IN_PROGRESS and release lock during copy */
         atomic_store(&job->status, AV1_COPY_IN_PROGRESS);
         
@@ -293,7 +276,6 @@ static void* copy_thread_main(void *arg) {
         
         /* Signal any waiters that the job is done */
         pthread_mutex_lock(&ct->mutex);
-        ct->current_job = NULL;  /* Clear in-flight job */
         pthread_cond_broadcast(&ct->job_complete);
     }
     
@@ -330,13 +312,3 @@ static void copy_job_execute(Av1CopyJob *job) {
     }
 }
 ```
-
-### Summary of fixes applied:
-
-1. **Fixed infinite wait loop** (lines ~130-135): Added proper while loop with closing brace, and added final status check after the loop.
-
-2. **Fixed race condition** (lines ~119-122): Moved the initial status check inside the mutex lock.
-
-3. **Fixed destroy synchronization**: Added `current_job` field to track in-flight job. The destroy function now waits for `current_job` to become NULL before joining the thread.
-
-4. **Added in-flight job tracking**: The copy thread now sets `ct->current_job` before executing and clears it after completion, allowing destroy to wait for in-flight jobs.

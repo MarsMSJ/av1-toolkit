@@ -14,30 +14,23 @@ struct IvfParser {
 
 #define IVF_MAGIC "DKIF"
 #define IVF_FOURCC_AV1 "AV01"
+#define IVF_MAX_FRAME_SIZE (16 * 1024 * 1024)  /* 16MB max frame size */
 
-/* Read a little-endian 16-bit value */
+/* Little-endian read helpers for portable big-endian support */
 static uint16_t read_le16(const uint8_t *data) {
     return (uint16_t)data[0] | ((uint16_t)data[1] << 8);
 }
 
-/* Read a little-endian 32-bit value */
 static uint32_t read_le32(const uint8_t *data) {
-    return (uint32_t)data[0] |
-           ((uint32_t)data[1] << 8) |
-           ((uint32_t)data[2] << 16) |
-           ((uint32_t)data[3] << 24);
+    return (uint32_t)data[0] | ((uint32_t)data[1] << 8) |
+           ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24);
 }
 
-/* Read a little-endian 64-bit value */
 static uint64_t read_le64(const uint8_t *data) {
-    return (uint64_t)data[0] |
-           ((uint64_t)data[1] << 8) |
-           ((uint64_t)data[2] << 16) |
-           ((uint64_t)data[3] << 24) |
-           ((uint64_t)data[4] << 32) |
-           ((uint64_t)data[5] << 40) |
-           ((uint64_t)data[6] << 48) |
-           ((uint64_t)data[7] << 56);
+    return (uint64_t)data[0] | ((uint64_t)data[1] << 8) |
+           ((uint64_t)data[2] << 16) | ((uint64_t)data[3] << 24) |
+           ((uint64_t)data[4] << 32) | ((uint64_t)data[5] << 40) |
+           ((uint64_t)data[6] << 48) | ((uint64_t)data[7] << 56);
 }
 
 static void read_header(IvfParser *parser) {
@@ -45,18 +38,27 @@ static void read_header(IvfParser *parser) {
         return;
     }
     
-    uint8_t header_bytes[sizeof(IvfHeader)];
-    
+    /* Read raw header bytes for endian-safe parsing */
+    uint8_t raw_header[32];
     fseek(parser->file, 0, SEEK_SET);
-    size_t read = fread(header_bytes, sizeof(IvfHeader), 1, parser->file);
+    size_t read = fread(raw_header, 1, 32, parser->file);
     
-    if (read != 1) {
+    if (read != 32) {
         parser->valid = false;
         return;
     }
     
-    /* Read magic (4 bytes) - no endian conversion needed for char array */
-    memcpy(parser->header.magic, header_bytes, 4);
+    /* Parse header fields as little-endian */
+    memcpy(parser->header.magic, raw_header, 4);
+    parser->header.version = read_le16(raw_header + 4);
+    parser->header.header_size = read_le16(raw_header + 6);
+    memcpy(parser->header.fourcc, raw_header + 8, 4);
+    parser->header.width = read_le16(raw_header + 12);
+    parser->header.height = read_le16(raw_header + 14);
+    parser->header.timebase_num = read_le32(raw_header + 16);
+    parser->header.timebase_den = read_le32(raw_header + 20);
+    parser->header.num_frames = read_le32(raw_header + 24);
+    /* raw_header[28-31] is unused */
     
     if (memcmp(parser->header.magic, IVF_MAGIC, 4) != 0) {
         fprintf(stderr, "Invalid IVF magic: %.4s\n", parser->header.magic);
@@ -64,17 +66,11 @@ static void read_header(IvfParser *parser) {
         return;
     }
     
-    /* Read version (uint16_t little-endian) */
-    parser->header.version = read_le16(header_bytes + 4);
-    
     if (parser->header.version != 0) {
         fprintf(stderr, "Unsupported IVF version: %d\n", parser->header.version);
         parser->valid = false;
         return;
     }
-    
-    /* Read header_size (uint16_t little-endian) */
-    parser->header.header_size = read_le16(header_bytes + 6);
     
     if (parser->header.header_size != 32) {
         fprintf(stderr, "Unexpected IVF header size: %d\n", parser->header.header_size);
@@ -82,30 +78,12 @@ static void read_header(IvfParser *parser) {
         return;
     }
     
-    /* Read fourcc (4 bytes) - no endian conversion needed for char array */
-    memcpy(parser->header.fourcc, header_bytes + 8, 4);
-    
     /* Validate fourcc is AV01 */
     if (memcmp(parser->header.fourcc, IVF_FOURCC_AV1, 4) != 0) {
         fprintf(stderr, "Invalid IVF fourcc: %.4s (expected AV01)\n", parser->header.fourcc);
         parser->valid = false;
         return;
     }
-    
-    /* Read width (uint16_t little-endian) */
-    parser->header.width = read_le16(header_bytes + 12);
-    
-    /* Read height (uint16_t little-endian) */
-    parser->header.height = read_le16(header_bytes + 14);
-    
-    /* Read timebase_num (uint32_t little-endian) */
-    parser->header.timebase_num = read_le32(header_bytes + 16);
-    
-    /* Read timebase_den (uint32_t little-endian) */
-    parser->header.timebase_den = read_le32(header_bytes + 20);
-    
-    /* Read num_frames (uint32_t little-endian) */
-    parser->header.num_frames = read_le32(header_bytes + 24);
     
     parser->valid = true;
     parser->current_frame = 0;
@@ -173,23 +151,21 @@ int ivf_parser_read_frame(IvfParser *parser, uint8_t **out_data, size_t *out_siz
         return -1;
     }
     
-    /* Read frame header bytes (12 bytes: 4 for size, 8 for timestamp) */
-    uint8_t frame_header_bytes[12];
-    size_t read = fread(frame_header_bytes, 1, 12, parser->file);
+    /* Read raw frame header bytes for endian-safe parsing */
+    uint8_t raw_frame_header[12];
+    size_t read = fread(raw_frame_header, 1, 12, parser->file);
     
     if (read != 12) {
         parser->eof = true;
         return -1;
     }
     
-    /* Parse frame size and timestamp as little-endian */
-    uint32_t frame_size = read_le32(frame_header_bytes);
-    uint64_t timestamp = read_le64(frame_header_bytes + 4);
+    uint32_t frame_size = read_le32(raw_frame_header);
+    uint64_t timestamp = read_le64(raw_frame_header + 4);
     
-    /* Sanity check: reject unreasonably large frame sizes to prevent
-       buffer allocation attacks or excessive memory usage */
-    if (frame_size > 256 * 1024 * 1024) {  /* 256 MB limit */
-        fprintf(stderr, "ivf_parser_read_frame: frame size too large: %u\n", frame_size);
+    /* Validate frame size is reasonable */
+    if (frame_size == 0 || frame_size > IVF_MAX_FRAME_SIZE) {
+        fprintf(stderr, "ivf_parser_read_frame: invalid frame size %u\n", frame_size);
         parser->eof = true;
         return -1;
     }
@@ -197,15 +173,14 @@ int ivf_parser_read_frame(IvfParser *parser, uint8_t **out_data, size_t *out_siz
     uint8_t *data = (uint8_t *)malloc(frame_size);
     if (!data) {
         fprintf(stderr, "ivf_parser_read_frame: failed to allocate frame buffer\n");
-        parser->eof = true;
         return -1;
     }
     
+    /* Read exactly frame_size bytes and verify success */
     read = fread(data, 1, frame_size, parser->file);
     
     if (read != frame_size) {
-        fprintf(stderr, "ivf_parser_read_frame: failed to read frame data (expected %u, got %zu)\n",
-                frame_size, read);
+        fprintf(stderr, "ivf_parser_read_frame: failed to read frame data (expected %u, got %zu)\n", frame_size, read);
         free(data);
         parser->eof = true;
         return -1;
@@ -258,21 +233,20 @@ int ivf_parser_seek_frame(IvfParser *parser, int frame_index) {
         return -1;
     }
     
-    fseek(parser->file, sizeof(IvfHeader), SEEK_SET);
+    fseek(parser->file, 32, SEEK_SET);  /* Skip IVF header (32 bytes) */
     
     for (int i = 0; i < frame_index; i++) {
-        /* Read frame header bytes (12 bytes) */
-        uint8_t frame_header_bytes[12];
-        if (fread(frame_header_bytes, 1, 12, parser->file) != 12) {
+        /* Read raw frame header for endian-safe parsing */
+        uint8_t raw_frame_header[12];
+        if (fread(raw_frame_header, 1, 12, parser->file) != 12) {
             return -1;
         }
         
-        /* Parse frame size as little-endian */
-        uint32_t frame_size = read_le32(frame_header_bytes);
+        uint32_t frame_size = read_le32(raw_frame_header);
         
-        /* Sanity check on frame size during seek */
-        if (frame_size > 256 * 1024 * 1024) {
-            fprintf(stderr, "ivf_parser_seek_frame: invalid frame size: %u\n", frame_size);
+        /* Validate frame size before seeking */
+        if (frame_size > IVF_MAX_FRAME_SIZE) {
+            fprintf(stderr, "ivf_parser_seek_frame: invalid frame size %u at index %d\n", frame_size, i);
             return -1;
         }
         
@@ -297,35 +271,13 @@ bool ivf_parser_is_valid(const char *filename) {
         return false;
     }
     
-    uint8_t header_bytes[32];
-    size_t read = fread(header_bytes, 1, 32, file);
+    char magic[4];
+    size_t read = fread(magic, 1, 4, file);
     fclose(file);
     
-    if (read != 32) {
+    if (read != 4) {
         return false;
     }
     
-    /* Check magic */
-    if (memcmp(header_bytes, IVF_MAGIC, 4) != 0) {
-        return false;
-    }
-    
-    /* Check version */
-    uint16_t version = read_le16(header_bytes + 4);
-    if (version != 0) {
-        return false;
-    }
-    
-    /* Check header_size */
-    uint16_t header_size = read_le16(header_bytes + 6);
-    if (header_size != 32) {
-        return false;
-    }
-    
-    /* Check fourcc is AV01 */
-    if (memcmp(header_bytes + 8, IVF_FOURCC_AV1, 4) != 0) {
-        return false;
-    }
-    
-    return true;
+    return memcmp(magic, IVF_MAGIC, 4) == 0;
 }

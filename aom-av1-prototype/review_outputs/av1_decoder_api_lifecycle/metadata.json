@@ -1,0 +1,23 @@
+{
+  "target": "av1_decoder_api_lifecycle",
+  "timestamp": "2026-04-12T01:21:43.368250",
+  "elapsed_seconds": 834.3853533267975,
+  "finish_reason": "stop",
+  "continuations": 0,
+  "usage": {
+    "prompt_tokens": 7180,
+    "total_tokens": 11864,
+    "completion_tokens": 4684,
+    "prompt_tokens_details": null
+  },
+  "corrected_files": [
+    "av1_decoder_api.c"
+  ],
+  "completed_areas": [
+    "av1_flush \u2014 checked, bugs found",
+    "av1_destroy_decoder \u2014 checked, bugs found",
+    "av1_decode \u2014 checked, bugs found"
+  ],
+  "pending_areas": [],
+  "response_hash": "c313eafc4b329281"
+}
