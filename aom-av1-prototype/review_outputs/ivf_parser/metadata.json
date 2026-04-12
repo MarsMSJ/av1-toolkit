@@ -1,0 +1,16 @@
+{
+  "target": "ivf_parser",
+  "timestamp": "2026-04-11T20:32:36.732197",
+  "elapsed_seconds": 646.1331174373627,
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 2179,
+    "total_tokens": 6022,
+    "completion_tokens": 3843,
+    "prompt_tokens_details": null
+  },
+  "corrected_files": [
+    "ivf_parser.c"
+  ],
+  "response_hash": "7443352e9e985633"
+}

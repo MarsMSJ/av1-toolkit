@@ -1,0 +1,16 @@
+{
+  "target": "test_e2e",
+  "timestamp": "2026-04-11T20:55:33.461096",
+  "elapsed_seconds": 816.4337494373322,
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 6826,
+    "total_tokens": 11666,
+    "completion_tokens": 4840,
+    "prompt_tokens_details": null
+  },
+  "corrected_files": [
+    "test_e2e.c"
+  ],
+  "response_hash": "936085b991d8b058"
+}
