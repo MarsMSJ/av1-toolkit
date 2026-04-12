@@ -36,8 +36,8 @@ REQUEST_TIMEOUT = 3600  # default 1 hour for all reviews
 AOM_BASE_DIR_CANDIDATES = [
     SCRIPT_DIR.parent / "aom",                      # sibling to aom-av1-prototype/
     SCRIPT_DIR.parent / "codec-dev-av1" / "aom",   # local checkout
+    Path.home() / "dev-tools" / "aom",             # spark: ~/dev-tools/aom
     Path.home() / "dev-tools" / "av1-toolkit" / "aom",
-    Path("/workspace/av1-toolkit/aom"),              # spark cluster
     Path("/workspace/aom"),                          # spark alternative
 ]
 
