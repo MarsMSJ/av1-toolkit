@@ -63,3 +63,35 @@
 [2026-04-11 20:55:33] 
 [2026-04-11 20:55:33] === Review complete ===
 [2026-04-11 20:55:33] Outputs: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 21:48:48] === AV1 Decoder Code Review Runner ===
+[2026-04-11 21:48:48] Base URL: http://192.168.1.120:8000/v1
+[2026-04-11 21:48:48] Model: MiniMax-M2.5
+[2026-04-11 21:48:48] Merge dir: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/verification_outputs/merge
+[2026-04-11 21:48:48] Output dir: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 21:48:48] AOM base: NOT FOUND
+[2026-04-11 21:48:48] Targets: ['av1_decoder_api_init']
+[2026-04-11 21:48:48] 
+[2026-04-11 21:48:48] ============================================================
+[2026-04-11 21:48:48] REVIEWING: av1_decoder_api_init
+[2026-04-11 21:48:48] ============================================================
+[2026-04-11 21:48:48]   Input: 3 messages, ~59,353 chars (~19,784 tokens)
+[2026-04-11 22:18:48]   ✗ TIMEOUT after 1800s
+[2026-04-11 22:18:48] 
+[2026-04-11 22:18:48] === Review complete ===
+[2026-04-11 22:18:48] Outputs: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 22:18:48] === AV1 Decoder Code Review Runner ===
+[2026-04-11 22:18:48] Base URL: http://192.168.1.120:8000/v1
+[2026-04-11 22:18:48] Model: MiniMax-M2.5
+[2026-04-11 22:18:48] Merge dir: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/verification_outputs/merge
+[2026-04-11 22:18:48] Output dir: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/review_outputs
+[2026-04-11 22:18:48] AOM base: NOT FOUND
+[2026-04-11 22:18:48] Targets: ['av1_decoder_api_output']
+[2026-04-11 22:18:48] 
+[2026-04-11 22:18:48] ============================================================
+[2026-04-11 22:18:48] REVIEWING: av1_decoder_api_output
+[2026-04-11 22:18:48] ============================================================
+[2026-04-11 22:18:48]   Input: 3 messages, ~61,839 chars (~20,613 tokens)
+[2026-04-11 22:48:48]   ✗ TIMEOUT after 1800s
+[2026-04-11 22:48:48] 
+[2026-04-11 22:48:48] === Review complete ===
+[2026-04-11 22:48:48] Outputs: /home/mars/dev-tools/av1-toolkit/aom-av1-prototype/review_outputs
