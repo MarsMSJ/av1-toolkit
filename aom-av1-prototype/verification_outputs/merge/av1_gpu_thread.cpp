@@ -25,13 +25,13 @@ Av1GpuThread* av1_gpu_thread_create(int queue_depth, void *gpu_device) {
         queue_depth = AV1_GPU_QUEUE_DEPTH;
     }
     
-    Av1GpuThread *gt = calloc(1, sizeof(Av1GpuThread));
+    Av1GpuThread *gt = static_cast<Av1GpuThread*>(calloc(1, sizeof(Av1GpuThread)));
     if (!gt) {
         return NULL;
     }
     
     /* Allocate queue entries - must match Av1GpuThread.jobs type (Av1GpuQueueEntry) */
-    gt->jobs = calloc(queue_depth, sizeof(gt->jobs[0]));
+    gt->jobs = static_cast<decltype(gt->jobs)>(calloc(queue_depth, sizeof(gt->jobs[0])));
     if (!gt->jobs) {
         free(gt);
         return NULL;
@@ -82,7 +82,7 @@ int av1_gpu_thread_enqueue(Av1GpuThread *gt, Av1GpuJob *job) {
         return -1;
     }
     
-    atomic_store(&job->status, AV1_GPU_JOB_PENDING);
+    job->status.store(AV1_GPU_JOB_PENDING);
     
     pthread_mutex_lock(&gt->mutex);
     
@@ -113,7 +113,7 @@ int av1_gpu_thread_wait(Av1GpuThread *gt, Av1GpuJob *job, uint32_t timeout_us) {
     /* Wait until job is complete or times out */
     if (timeout_us == 0) {
         /* Infinite wait */
-        while (atomic_load(&job->status) != AV1_GPU_JOB_COMPLETE) {
+        while (job->status.load() != AV1_GPU_JOB_COMPLETE) {
             pthread_cond_wait(&gt->job_complete, &gt->mutex);
         }
     } else {
@@ -128,7 +128,7 @@ int av1_gpu_thread_wait(Av1GpuThread *gt, Av1GpuJob *job, uint32_t timeout_us) {
         ts.tv_sec += (int)(nsec / 1000000000ULL);
         ts.tv_nsec = (long)(nsec % 1000000000ULL);
         
-        while (atomic_load(&job->status) != AV1_GPU_JOB_COMPLETE) {
+        while (job->status.load() != AV1_GPU_JOB_COMPLETE) {
             int ret = pthread_cond_timedwait(&gt->job_complete, &gt->mutex, &ts);
             if (ret == ETIMEDOUT) {
                 pthread_mutex_unlock(&gt->mutex);
@@ -141,7 +141,7 @@ int av1_gpu_thread_wait(Av1GpuThread *gt, Av1GpuJob *job, uint32_t timeout_us) {
         }
     }
     
-    int final_status = atomic_load(&job->status);
+    int final_status = job->status.load();
     pthread_mutex_unlock(&gt->mutex);
     
     return (final_status == AV1_GPU_JOB_COMPLETE) ? 0 : -1;
@@ -151,7 +151,7 @@ int av1_gpu_thread_get_status(Av1GpuJob *job) {
     if (!job) {
         return -1;
     }
-    return atomic_load(&job->status);
+    return job->status.load();
 }
 
 int av1_gpu_thread_destroy(Av1GpuThread *gt) {
@@ -191,21 +191,21 @@ static void* gpu_thread_main(void *arg) {
         }
         
         /* Dequeue job */
-        Av1GpuQueueEntry *entry = &gt->jobs[gt->head];
+        auto *entry = &gt->jobs[gt->head];
         Av1GpuJob *job = entry->job;
         
         gt->head = (gt->head + 1) % gt->capacity;
         gt->count--;
         entry->enqueued = 0;
         
-        atomic_store(&job->status, AV1_GPU_JOB_PROCESSING);
+        job->status.store(AV1_GPU_JOB_PROCESSING);
         
         pthread_mutex_unlock(&gt->mutex);
         
         /* STUB: Simulate GPU processing */
         usleep(STUB_PROCESSING_DELAY_US);
         
-        atomic_store(&job->status, AV1_GPU_JOB_COMPLETE);
+        job->status.store(AV1_GPU_JOB_COMPLETE);
         
         pthread_mutex_lock(&gt->mutex);
         pthread_cond_broadcast(&gt->job_complete);

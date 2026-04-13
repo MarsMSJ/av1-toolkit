@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
-project(av1_console_decoder C)
+project(av1_console_decoder CXX)
 
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ---------------------------------------------------------------------------
 # Find libaom — either from a local build or system install
@@ -53,11 +53,11 @@ endif()
 # ---------------------------------------------------------------------------
 
 add_library(av1_console_decoder STATIC
-    av1_decoder_api.c
-    av1_mem_override.c
-    av1_job_queue.c
-    av1_copy_thread.c
-    av1_gpu_thread.c
+    av1_decoder_api.cpp
+    av1_mem_override.cpp
+    av1_job_queue.cpp
+    av1_copy_thread.cpp
+    av1_gpu_thread.cpp
 )
 
 target_include_directories(av1_console_decoder
@@ -81,8 +81,8 @@ target_compile_options(av1_console_decoder PRIVATE
 # ---------------------------------------------------------------------------
 
 add_library(av1_utils STATIC
-    ivf_parser.c
-    y4m_writer.c
+    ivf_parser.cpp
+    y4m_writer.cpp
 )
 
 target_include_directories(av1_utils
@@ -94,24 +94,24 @@ target_include_directories(av1_utils
 # ---------------------------------------------------------------------------
 
 # End-to-end test: decode IVF → Y4M
-add_executable(test_e2e test_e2e.c)
+add_executable(test_e2e test_e2e.cpp)
 target_link_libraries(test_e2e PRIVATE av1_console_decoder av1_utils)
 
 # Unit tests
-add_executable(test_mem_override test_mem_override.c)
+add_executable(test_mem_override test_mem_override.cpp)
 target_link_libraries(test_mem_override PRIVATE av1_console_decoder)
 
-add_executable(test_job_queue test_job_queue.c)
+add_executable(test_job_queue test_job_queue.cpp)
 target_link_libraries(test_job_queue PRIVATE av1_console_decoder)
 
-add_executable(test_copy_thread test_copy_thread.c)
+add_executable(test_copy_thread test_copy_thread.cpp)
 target_link_libraries(test_copy_thread PRIVATE av1_console_decoder)
 
-add_executable(test_gpu_thread test_gpu_thread.c)
+add_executable(test_gpu_thread test_gpu_thread.cpp)
 target_link_libraries(test_gpu_thread PRIVATE av1_console_decoder)
 
 # IVF test file generator
-add_executable(generate_test_ivf generate_test_ivf.c)
+add_executable(generate_test_ivf generate_test_ivf.cpp)
 target_link_libraries(generate_test_ivf PRIVATE av1_utils)
 
 # ---------------------------------------------------------------------------

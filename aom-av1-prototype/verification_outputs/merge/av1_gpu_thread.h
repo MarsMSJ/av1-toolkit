@@ -1,8 +1,8 @@
 #ifndef AV1_GPU_THREAD_H
 #define AV1_GPU_THREAD_H
 
-#include <stdint.h>
-#include <stdatomic.h>
+#include <cstdint>
+#include <atomic>
 #include <pthread.h>
 
 /* GPU job status values */
@@ -22,7 +22,7 @@ typedef struct Av1GpuJob {
     int      dpb_slot;
     int      needs_film_grain;
     void    *dst_descriptor;
-    _Atomic int status;
+    std::atomic<int> status;
 } Av1GpuJob;
 
 /**

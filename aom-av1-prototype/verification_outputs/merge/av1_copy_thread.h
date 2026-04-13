@@ -1,8 +1,8 @@
 #ifndef AV1_COPY_THREAD_H
 #define AV1_COPY_THREAD_H
 
-#include <stdint.h>
-#include <stdatomic.h>
+#include <cstdint>
+#include <atomic>
 #include <pthread.h>
 
 /* Copy job status values */
@@ -30,7 +30,7 @@ typedef struct Av1CopyJob {
     int            plane_heights[3];
     
     /* Status - atomic for thread-safe access */
-    _Atomic int    status;
+    std::atomic<int> status;
 } Av1CopyJob;
 
 /* Opaque copy thread handle */

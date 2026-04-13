@@ -25,7 +25,7 @@ static void test_basic_capacity(void) {
     ASSERT(av1_frame_queue_init(&q, storage, CAPACITY) == 0, "Queue init");
     
     for (int i = 0; i < CAPACITY; i++) {
-        Av1FrameEntry e = { .frame_id = i, .dpb_slot = i, .show_frame = 1, .show_existing_frame = 0 };
+        Av1FrameEntry e = { .frame_id = static_cast<uint32_t>(i), .dpb_slot = i, .show_frame = 1, .show_existing_frame = 0 };
         ASSERT(av1_frame_queue_push(&q, &e) == 0, "Push entry");
     }
     
@@ -43,7 +43,7 @@ static void test_fifo_order(void) {
     av1_frame_queue_init(&q, storage, CAPACITY);
     
     for (int i = 0; i < CAPACITY; i++) {
-        Av1FrameEntry e = { .frame_id = i * 10, .dpb_slot = i, .show_frame = i % 2, .show_existing_frame = 0 };
+        Av1FrameEntry e = { .frame_id = static_cast<uint32_t>(i * 10), .dpb_slot = i, .show_frame = i % 2, .show_existing_frame = 0 };
         av1_frame_queue_push(&q, &e);
     }
     

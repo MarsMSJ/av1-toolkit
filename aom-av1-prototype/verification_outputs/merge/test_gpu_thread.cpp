@@ -45,7 +45,11 @@ static void test_multiple_jobs(void) {
     
     Av1GpuJob jobs[NUM_JOBS];
     for (int i = 0; i < NUM_JOBS; i++) {
-        jobs[i] = (Av1GpuJob){ .frame_id = (uint32_t)(i * 10), .dpb_slot = i, .needs_film_grain = (i % 2 == 0) };
+        jobs[i].frame_id = static_cast<uint32_t>(i * 10);
+        jobs[i].dpb_slot = i;
+        jobs[i].needs_film_grain = (i % 2 == 0) ? 1 : 0;
+        jobs[i].dst_descriptor = nullptr;
+        jobs[i].status.store(0);
         av1_gpu_thread_enqueue(gt, &jobs[i]);
     }
     

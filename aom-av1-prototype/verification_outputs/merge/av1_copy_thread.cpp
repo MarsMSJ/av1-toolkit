@@ -39,12 +39,12 @@ Av1CopyThread* av1_copy_thread_create(int queue_depth) {
         queue_depth = AV1_COPY_QUEUE_DEPTH;
     }
     
-    Av1CopyThread *ct = calloc(1, sizeof(Av1CopyThread));
+    Av1CopyThread *ct = static_cast<Av1CopyThread*>(calloc(1, sizeof(Av1CopyThread)));
     if (!ct) {
         return NULL;
     }
     
-    ct->queue = calloc(queue_depth, sizeof(Av1CopyQueueEntry));
+    ct->queue = static_cast<Av1CopyQueueEntry*>(calloc(queue_depth, sizeof(Av1CopyQueueEntry)));
     if (!ct->queue) {
         free(ct);
         return NULL;
@@ -98,7 +98,7 @@ int av1_copy_thread_enqueue(Av1CopyThread *ct, Av1CopyJob *job) {
     }
     
     /* Initialize job status */
-    atomic_store(&job->status, AV1_COPY_PENDING);
+    job->status.store(AV1_COPY_PENDING);
     
     pthread_mutex_lock(&ct->mutex);
     
@@ -130,7 +130,7 @@ int av1_copy_thread_wait(Av1CopyThread *ct, Av1CopyJob *job, uint32_t timeout_us
     pthread_mutex_lock(&ct->mutex);
     
     /* Check current status without waiting */
-    int current_status = atomic_load(&job->status);
+    int current_status = job->status.load();
     if (current_status == AV1_COPY_COMPLETE) {
         pthread_mutex_unlock(&ct->mutex);
         return 0;
@@ -140,7 +140,7 @@ int av1_copy_thread_wait(Av1CopyThread *ct, Av1CopyJob *job, uint32_t timeout_us
     if (current_status == AV1_COPY_PENDING || current_status == AV1_COPY_IN_PROGRESS) {
         if (timeout_us == 0) {
             /* Infinite wait */
-            while (atomic_load(&job->status) != AV1_COPY_COMPLETE) {
+            while (job->status.load() != AV1_COPY_COMPLETE) {
                 pthread_cond_wait(&ct->job_complete, &ct->mutex);
             }
         } else {
@@ -155,7 +155,7 @@ int av1_copy_thread_wait(Av1CopyThread *ct, Av1CopyJob *job, uint32_t timeout_us
             ts.tv_sec += (int)(nsec / 1000000000ULL);
             ts.tv_nsec = (long)(nsec % 1000000000ULL);
             
-            while (atomic_load(&job->status) != AV1_COPY_COMPLETE) {
+            while (job->status.load() != AV1_COPY_COMPLETE) {
                 int ret = pthread_cond_timedwait(&ct->job_complete, &ct->mutex, &ts);
                 if (ret == ETIMEDOUT) {
                     pthread_mutex_unlock(&ct->mutex);
@@ -170,7 +170,7 @@ int av1_copy_thread_wait(Av1CopyThread *ct, Av1CopyJob *job, uint32_t timeout_us
     }
     
     /* Check final status */
-    int final_status = atomic_load(&job->status);
+    int final_status = job->status.load();
     pthread_mutex_unlock(&ct->mutex);
     
     return (final_status == AV1_COPY_COMPLETE) ? 0 : -1;
@@ -180,7 +180,7 @@ int av1_copy_thread_get_status(Av1CopyJob *job) {
     if (!job) {
         return -1;
     }
-    return atomic_load(&job->status);
+    return job->status.load();
 }
 
 int av1_copy_thread_destroy(Av1CopyThread *ct) {
@@ -237,7 +237,7 @@ static void* copy_thread_main(void *arg) {
         entry->enqueued = 0;
         
         /* Set status to IN_PROGRESS and release lock during copy */
-        atomic_store(&job->status, AV1_COPY_IN_PROGRESS);
+        job->status.store(AV1_COPY_IN_PROGRESS);
         
         pthread_mutex_unlock(&ct->mutex);
         
@@ -245,7 +245,7 @@ static void* copy_thread_main(void *arg) {
         copy_job_execute(job);
         
         /* Mark job as complete */
-        atomic_store(&job->status, AV1_COPY_COMPLETE);
+        job->status.store(AV1_COPY_COMPLETE);
         
         /* Signal any waiters that the job is done */
         pthread_mutex_lock(&ct->mutex);

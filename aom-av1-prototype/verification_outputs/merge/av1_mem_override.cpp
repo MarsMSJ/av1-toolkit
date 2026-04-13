@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
-#include <stdalign.h>
 
 #define MIN_ALIGNMENT        16
 #define ALIGN64(x)           (((x) + 63) & ~63)
@@ -276,7 +275,7 @@ void av1_mem_free(void *ptr) {
 }
 
 Av1MemStats av1_mem_get_stats(void) {
-    Av1MemStats stats = {0};
+    Av1MemStats stats = {};
     
     if (g_header_initialized) {
         pthread_mutex_lock(&g_mem_header.mutex);
@@ -390,7 +389,9 @@ void *av1_mem_override_memalign(size_t alignment, size_t size) {
     if (av1_mem_get_override_enabled()) {
         return av1_mem_memalign(alignment, size);
     }
-    return memalign(alignment, size);
+    // aligned_alloc requires size to be a multiple of alignment
+    size_t aligned_size = (size + alignment - 1) & ~(alignment - 1);
+    return aligned_alloc(alignment, aligned_size);
 }
 
 void *av1_mem_override_calloc(size_t num, size_t size) {

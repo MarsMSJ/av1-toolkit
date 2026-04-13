@@ -65,7 +65,7 @@ int main(int argc, char *argv[]) {
     
     g_seed = (uint32_t)time(NULL);
     
-    void **ptrs = malloc(sizeof(void *) * NUM_ALLOCATIONS);
+    void **ptrs = static_cast<void**>(malloc(sizeof(void *) * NUM_ALLOCATIONS));
     if (!ptrs) {
         av1_mem_shutdown();
         free(mem_block);
@@ -89,7 +89,7 @@ int main(int argc, char *argv[]) {
     
     printf("\nPhase 2: Freeing %d random blocks...\n", NUM_FREE_HALF);
     
-    bool *was_freed = calloc(NUM_ALLOCATIONS, sizeof(bool));
+    bool *was_freed = static_cast<bool*>(calloc(NUM_ALLOCATIONS, sizeof(bool)));
     for (int i = 0; i < NUM_FREE_HALF; i++) {
         int idx;
         do {

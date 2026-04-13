@@ -12,6 +12,9 @@ typedef struct Av1Decoder Av1Decoder;
 // Include stream info from memory override
 #include "av1_mem_override.h"
 
+// Include job queue for Av1FrameEntry
+#include "av1_job_queue.h"
+
 // Include copy thread for copy job handling
 #include "av1_copy_thread.h"
 

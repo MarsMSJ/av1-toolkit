@@ -21,12 +21,12 @@ static int tests_failed = 0;
 static void test_single_copy(void) {
     printf("Test 1: Basic single copy\n");
     
-    uint8_t *src_y = aligned_alloc(32, Y_SIZE);
-    uint8_t *src_u = aligned_alloc(32, UV_SIZE);
-    uint8_t *src_v = aligned_alloc(32, UV_SIZE);
-    uint8_t *dst_y = aligned_alloc(32, Y_SIZE);
-    uint8_t *dst_u = aligned_alloc(32, UV_SIZE);
-    uint8_t *dst_v = aligned_alloc(32, UV_SIZE);
+    uint8_t *src_y = static_cast<uint8_t*>(aligned_alloc(32, Y_SIZE));
+    uint8_t *src_u = static_cast<uint8_t*>(aligned_alloc(32, UV_SIZE));
+    uint8_t *src_v = static_cast<uint8_t*>(aligned_alloc(32, UV_SIZE));
+    uint8_t *dst_y = static_cast<uint8_t*>(aligned_alloc(32, Y_SIZE));
+    uint8_t *dst_u = static_cast<uint8_t*>(aligned_alloc(32, UV_SIZE));
+    uint8_t *dst_v = static_cast<uint8_t*>(aligned_alloc(32, UV_SIZE));
     
     memset(src_y, 0xAA, Y_SIZE);
     memset(src_u, 0xBB, UV_SIZE);
@@ -69,12 +69,12 @@ static void test_multiple_jobs(void) {
     Av1CopyThread *ct = av1_copy_thread_create(8);
     ASSERT(ct != NULL, "Copy thread created");
     
-    uint8_t *src_y = aligned_alloc(32, 256);
-    uint8_t *src_u = aligned_alloc(32, 64);
-    uint8_t *src_v = aligned_alloc(32, 64);
-    uint8_t *dst_y = aligned_alloc(32, 256);
-    uint8_t *dst_u = aligned_alloc(32, 64);
-    uint8_t *dst_v = aligned_alloc(32, 64);
+    uint8_t *src_y = static_cast<uint8_t*>(aligned_alloc(32, 256));
+    uint8_t *src_u = static_cast<uint8_t*>(aligned_alloc(32, 64));
+    uint8_t *src_v = static_cast<uint8_t*>(aligned_alloc(32, 64));
+    uint8_t *dst_y = static_cast<uint8_t*>(aligned_alloc(32, 256));
+    uint8_t *dst_u = static_cast<uint8_t*>(aligned_alloc(32, 64));
+    uint8_t *dst_v = static_cast<uint8_t*>(aligned_alloc(32, 64));
     
     memset(src_y, 0xAA, 256);
     memset(src_u, 0xBB, 64);
@@ -83,16 +83,15 @@ static void test_multiple_jobs(void) {
     Av1CopyJob jobs[4];
     for (int i = 0; i < 4; i++) {
         memset(dst_y, 0, 256);
-        jobs[i] = (Av1CopyJob){
-            .frame_id = i,
-            .dpb_slot = i,
-            .src_planes = { src_y, src_u, src_v },
-            .src_strides = { 16, 8, 8 },
-            .dst_planes = { dst_y, dst_u, dst_v },
-            .dst_strides = { 16, 8, 8 },
-            .plane_widths = { 16, 8, 8 },
-            .plane_heights = { 16, 8, 8 },
-        };
+        memset(&jobs[i], 0, sizeof(Av1CopyJob));
+        jobs[i].frame_id = static_cast<uint32_t>(i);
+        jobs[i].dpb_slot = i;
+        jobs[i].src_planes[0] = src_y; jobs[i].src_planes[1] = src_u; jobs[i].src_planes[2] = src_v;
+        jobs[i].src_strides[0] = 16; jobs[i].src_strides[1] = 8; jobs[i].src_strides[2] = 8;
+        jobs[i].dst_planes[0] = dst_y; jobs[i].dst_planes[1] = dst_u; jobs[i].dst_planes[2] = dst_v;
+        jobs[i].dst_strides[0] = 16; jobs[i].dst_strides[1] = 8; jobs[i].dst_strides[2] = 8;
+        jobs[i].plane_widths[0] = 16; jobs[i].plane_widths[1] = 8; jobs[i].plane_widths[2] = 8;
+        jobs[i].plane_heights[0] = 16; jobs[i].plane_heights[1] = 8; jobs[i].plane_heights[2] = 8;
         av1_copy_thread_enqueue(ct, &jobs[i]);
     }
     

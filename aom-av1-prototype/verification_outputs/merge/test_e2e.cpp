@@ -23,16 +23,16 @@ static void print_usage(const char *prog) {
 }
 
 static Av1OutputBuffer* allocate_output_buffer(int width, int height, int bit_depth) {
-    Av1OutputBuffer *buffer = calloc(1, sizeof(Av1OutputBuffer));
+    Av1OutputBuffer *buffer = static_cast<Av1OutputBuffer*>(calloc(1, sizeof(Av1OutputBuffer)));
     if (!buffer) return NULL;
     
     int bytes_per_pixel = (bit_depth > 8) ? 2 : 1;
     int y_size = width * height * bytes_per_pixel;
     int uv_size = (width / 2) * (height / 2) * bytes_per_pixel;
     
-    buffer->planes[0] = aligned_alloc(64, y_size);
-    buffer->planes[1] = aligned_alloc(64, uv_size);
-    buffer->planes[2] = aligned_alloc(64, uv_size);
+    buffer->planes[0] = static_cast<uint8_t*>(aligned_alloc(64, y_size));
+    buffer->planes[1] = static_cast<uint8_t*>(aligned_alloc(64, uv_size));
+    buffer->planes[2] = static_cast<uint8_t*>(aligned_alloc(64, uv_size));
     
     if (!buffer->planes[0] || !buffer->planes[1] || !buffer->planes[2]) {
         free(buffer->planes[0]);
@@ -377,8 +377,8 @@ static int decode_file(const char *ivf_file, const char *y4m_file,
 int main(int argc, char *argv[]) {
     printf("=== AV1 Decoder End-to-End Test ===\n\n");
     
-    const char *ivf_file = NULL;
-    const char *y4m_file = NULL;
+    const char *ivf_file = nullptr;
+    char *y4m_file = nullptr;
     int queue_depth = DEFAULT_QUEUE_DEPTH;
     int num_workers = DEFAULT_WORKERS;
     bool verbose = false;
@@ -408,7 +408,7 @@ int main(int argc, char *argv[]) {
     
     if (!y4m_file) {
         size_t len = strlen(ivf_file);
-        y4m_file = malloc(len + 5);
+        y4m_file = static_cast<char*>(malloc(len + 5));
         if (!y4m_file) {
             fprintf(stderr, "Error: Failed to allocate memory for output filename\n");
             return 1;

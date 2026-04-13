@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
-#include <stdalign.h>
+#include <climits>
 #include <sched.h>
 #include <errno.h>
 
@@ -199,13 +199,17 @@ static int set_thread_priority(pthread_t thread, const Av1ThreadConfig *config) 
         }
     }
     
-    // Set CPU affinity if specified
+    // Set CPU affinity if specified (Linux only)
+#ifdef __linux__
     if (config->cpu_affinity >= 0) {
         cpu_set_t cpuset;
         CPU_ZERO(&cpuset);
         CPU_SET(config->cpu_affinity, &cpuset);
         pthread_setaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
     }
+#else
+    (void)thread; // suppress unused warning when affinity is not supported
+#endif
     
     return 0;
 }
@@ -396,7 +400,7 @@ static void *gpu_thread_func(void *arg) {
 Av1MemoryRequirements av1_query_memory(const Av1StreamInfo *info, 
                                         int queue_depth, 
                                         int num_workers) {
-    Av1MemoryRequirements req = {0};
+    Av1MemoryRequirements req = {};
     
     if (!info || queue_depth < 0 || num_workers < 0) {
         fprintf(stderr, "av1_query_memory: invalid parameters\n");
@@ -436,8 +440,10 @@ Av1MemoryRequirements av1_query_memory(const Av1StreamInfo *info,
     
     // 8. Other (queues, thread structures, etc.)
     size_t queue_storage = (size_t)(queue_depth + 4) * sizeof(Av1FrameEntry) * 2;
-    size_t thread_structs = (size_t)workers * sizeof(Av1WorkerThread) + 
-                            sizeof(Av1CopyThread) +
+    // Note: Av1CopyThread is opaque (incomplete type), estimate its size
+    size_t estimated_copy_thread_size = 256; // conservative estimate for opaque struct
+    size_t thread_structs = (size_t)workers * sizeof(Av1WorkerThread) +
+                            estimated_copy_thread_size +
                             sizeof(Av1GPUThread);
     size_t decoder_struct = sizeof(Av1Decoder);
     req.breakdown.other = queue_storage + thread_structs + decoder_struct;
@@ -542,27 +548,31 @@ Av1Decoder *av1_create_decoder(const Av1DecoderConfig *config) {
     
     // Initialize AOM decoder
     memset(&decoder->aom_decoder, 0, sizeof(decoder->aom_decoder));
-    
+
+    // Forward-declare variables used after goto labels (C++ forbids jumping over initializers)
+    int queue_capacity = 0;
+    Av1FrameEntry *output_storage = nullptr;
+    int num_workers = 0;
+
     // Configure AOM decoder
-    aom_codec_dec_cfg_t aom_config = {
-        .threads = config->num_worker_threads > 0 ? config->num_worker_threads : 1,
-        .width = 0,
-        .height = 0,
-        .alloc_buf = NULL,
-        .alloc_buf_size = 0,
-        .init_flags = 0
-    };
-    
-    if (config->enable_threading) {
-        aom_config.init_flags |= AOM_CODEC_USE_THREADS;
-    }
-    
-    // BUG FIX 1.1: Use correct AOM decoder initialization function
-    // aom_codec_dec_init_ver() is the proper API for decoder initialization
-    aom_codec_err_t aom_err = aom_codec_dec_init_ver(&decoder->aom_decoder, 
-                                                      &aom_codec_av1_dx, 
-                                                      &aom_config, 
-                                                      aom_config.init_flags, 
+    // aom_codec_dec_cfg_t has: threads, w, h, allow_lowbitdepth
+    aom_codec_dec_cfg_t aom_config;
+    memset(&aom_config, 0, sizeof(aom_config));
+    aom_config.threads = config->num_worker_threads > 0
+                             ? static_cast<unsigned int>(config->num_worker_threads)
+                             : 1u;
+    aom_config.w = 0;
+    aom_config.h = 0;
+    aom_config.allow_lowbitdepth = 1;
+
+    // Thread count is set via the cfg.threads field; there is no AOM_CODEC_USE_THREADS flag.
+    // Flags parameter to aom_codec_dec_init_ver is passed separately (0 = no special flags).
+    aom_codec_flags_t init_flags = 0;
+
+    aom_codec_err_t aom_err = aom_codec_dec_init_ver(&decoder->aom_decoder,
+                                                      aom_codec_av1_dx(),
+                                                      &aom_config,
+                                                      init_flags,
                                                       AOM_DECODER_ABI_VERSION);
     if (aom_err != AOM_CODEC_OK) {
         fprintf(stderr, "av1_create_decoder: failed to initialize AOM decoder: %s\n",
@@ -585,8 +595,8 @@ Av1Decoder *av1_create_decoder(const Av1DecoderConfig *config) {
     }
     
     // Allocate queue storage
-    int queue_capacity = config->queue_depth + 4;
-    decoder->queue_storage_size = queue_capacity * sizeof(Av1FrameEntry) * 2;
+    queue_capacity = config->queue_depth + 4;
+    decoder->queue_storage_size = queue_capacity * static_cast<int>(sizeof(Av1FrameEntry)) * 2;
     decoder->queue_storage = (Av1FrameEntry *)av1_mem_memalign(DEFAULT_ALIGNMENT, 
                                                                  decoder->queue_storage_size);
     if (!decoder->queue_storage) {
@@ -602,7 +612,7 @@ Av1Decoder *av1_create_decoder(const Av1DecoderConfig *config) {
     }
     
     // Initialize output queue
-    Av1FrameEntry *output_storage = decoder->queue_storage + queue_capacity;
+    output_storage = decoder->queue_storage + queue_capacity;
     if (av1_frame_queue_init(&decoder->output_queue, output_storage, 
                               queue_capacity) != 0) {
         fprintf(stderr, "av1_create_decoder: failed to init output queue\n");
@@ -617,7 +627,7 @@ Av1Decoder *av1_create_decoder(const Av1DecoderConfig *config) {
     }
     
     // Allocate and create worker threads
-    int num_workers = config->num_worker_threads > 0 ? config->num_worker_threads : 4;
+    num_workers = config->num_worker_threads > 0 ? config->num_worker_threads : 4;
     decoder->num_workers = num_workers;
     
     if (num_workers > 0) {
@@ -755,12 +765,12 @@ Av1DecodeResult av1_flush(Av1Decoder *decoder) {
         // Ignore flush errors
     }
     
-    // Reset iterator for flush operation
-    decoder->aom_decoder.iter = NULL;
-    
+    // Use a local iterator for frame retrieval
+    aom_codec_iter_t flush_iter = NULL;
+
     // Try to get any remaining frames from AOM
     aom_image_t *img;
-    while ((img = aom_codec_get_frame(&decoder->aom_decoder, &decoder->aom_decoder.iter)) != NULL) {
+    while ((img = aom_codec_get_frame(&decoder->aom_decoder, &flush_iter)) != NULL) {
         uint32_t frame_id = decoder->next_frame_id++;
         int dpb_slot = allocate_dpb_slot(decoder, img->w, img->h, img->bit_depth);
         
@@ -994,11 +1004,11 @@ Av1DecodeResult av1_decode(Av1Decoder *decoder,
     int dpb_slot = -1;
     uint32_t frame_id = 0;
     
-    // FIX: Reset iterator to NULL at start of frame retrieval
-    decoder->aom_decoder.iter = NULL;
-    
+    // Use a local iterator for frame retrieval (aom_codec_ctx_t has no .iter member)
+    aom_codec_iter_t decode_iter = NULL;
+
     // Get decoded frame from AOM
-    aom_image_t *img = aom_codec_get_frame(&decoder->aom_decoder, &decoder->aom_decoder.iter);
+    aom_image_t *img = aom_codec_get_frame(&decoder->aom_decoder, &decode_iter);
     
     if (img) {
         frame_ready = 1;
@@ -1022,11 +1032,10 @@ Av1DecodeResult av1_decode(Av1Decoder *decoder,
         // Store frame metadata
         slot->width = img->w;
         slot->height = img->h;
-        slot->stride[0] = img->stride[0];
-        slot->stride[1] = img->stride[1];
-        slot->stride[2] = img->stride[2];
+        slot->strides[0] = img->stride[0];
+        slot->strides[1] = img->stride[1];
+        slot->strides[2] = img->stride[2];
         slot->bit_depth = img->bit_depth;
-        slot->fmt = img->fmt;
         
         // Copy Y plane
         if (img->planes[0]) {
@@ -1127,7 +1136,7 @@ Av1DecodeResult av1_sync(Av1Decoder *decoder,
         fprintf(stderr, "av1_sync: failed to add to pending output (table full?)\n");
         // Put it back in queue
         av1_frame_queue_push(&decoder->ready_queue, &entry);
-        return AV1_ERROR_QUEUE_FULL;
+        return AV1_QUEUE_FULL;
     }
     
     // Fill output result
